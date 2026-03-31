@@ -30,6 +30,7 @@ jobs:
         env:
           FULL_TEXT: ${{ github.event.client_payload.full_text }}
           SCENES_DATA: ${{ github.event.client_payload.scenes_data }}
+          THUMBNAIL_PROMPT: ${{ github.event.client_payload.thumbnail_prompt }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           RESUME_URL: ${{ github.event.client_payload.resume_url }}
           WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
