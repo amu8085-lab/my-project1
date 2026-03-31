@@ -14,7 +14,8 @@ resume_url = os.environ.get('RESUME_URL') # n8n Wait Node Resume URL
 print(f"Total Scenes to render: {len(scenes_data)}")
 
 # 1. FREE AI Voiceover
-subprocess.run(['edge-tts', '--voice', 'hi-IN-SwaraNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
+# subprocess.run(['edge-tts', '--voice', 'hi-IN-SwaraNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
+subprocess.run(['edge-tts', '--voice', 'hi-IN-MadhurNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
 voiceover = AudioFileClip("voiceover.mp3")
 
 total_chars = sum(len(s['text']) for s in scenes_data)
