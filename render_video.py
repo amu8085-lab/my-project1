@@ -32,7 +32,7 @@ except:
 
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
 
-# CHANGE: Landscape Resolution for Long Form Video
+# Landscape Resolution for Long Form Video
 TARGET_W, TARGET_H = 1920, 1080
 
 # 2. Process Each Scene
@@ -43,7 +43,7 @@ for i, scene in enumerate(scenes_data):
     if scene_duration < 2.0: scene_duration = 2.0
     
     try:
-        # CHANGE: orientation=landscape
+        # Pexels Landscape search
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
         video_url = res['videos'][0]['video_files'][0]['link']
         
@@ -70,7 +70,7 @@ for i, scene in enumerate(scenes_data):
         for w_i, chunk in enumerate(chunks):
             current_color = viral_colors[w_i % len(viral_colors)]
             
-            # CHANGE: Adjusted font size and width for horizontal layout
+            # Adjusted font size and width for horizontal layout
             bg_txt = TextClip(chunk, fontsize=90, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=12, method='caption', size=(1500, None))
             bg_txt = bg_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
@@ -108,10 +108,14 @@ print("Rendering Final LONG Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2)
 
 # --- THUMBNAIL GENERATION ---
-print("Generating AI Thumbnail...")
+print("Generating AI Thumbnail with FLUX...")
 try:
-    encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", youtube thumbnail, vibrant, cinematic lighting, ultra high resolution")
-    thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true"
+    # 1000/10 Quality aur MrBeast style ke liye naya prompt aur FLUX model
+    encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, 8k resolution, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
+    
+    # URL me '&model=flux' add kiya gaya hai 3D text render karne ke liye
+    thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true&model=flux"
+    
     with open("thumbnail.jpg", "wb") as f:
         f.write(requests.get(thumb_url).content)
     
@@ -130,7 +134,7 @@ except:
 
 payload = {
     "chat_id": chat_id, 
-    "message": "👑 Bhai! Long Video Ready! 🔥", 
+    "message": "👑 Bhai! 100M+ Views Long Video & Clickable Thumbnail Ready! 🔥", 
     "youtube_url": video_link,
     "thumbnail_url": uploaded_thumb_link
 }
