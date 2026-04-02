@@ -2,8 +2,10 @@ import os, requests, json, subprocess, urllib.parse
 import moviepy.editor as mpe
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ColorClip
 
+# Font file check kar lijiye ki repo mein isi naam se hai
 HINDI_FONT_FILE = "Hindi.ttf" 
 
+# Environment Variables
 full_text = os.environ.get('FULL_TEXT', 'Ek baar ki baat hai.')
 chat_id = os.environ.get('CHAT_ID')
 webhook_url = os.environ.get('WEBHOOK_URL')
@@ -14,7 +16,7 @@ resume_url = os.environ.get('RESUME_URL')
 
 print(f"Total Scenes to render: {len(scenes_data)}")
 
-# 1. AI Voiceover
+# 1. AI Voiceover Generation
 subprocess.run(['edge-tts', '--voice', 'hi-IN-MadhurNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
 voiceover = AudioFileClip("voiceover.mp3")
 
@@ -39,6 +41,8 @@ TARGET_W, TARGET_H = 1920, 1080
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'nature')
     text_line = scene.get('text', '')
+    
+    # Calculate exact duration for this scene
     scene_duration = voiceover.duration * (len(text_line) / max(total_chars, 1))
     if scene_duration < 2.0: scene_duration = 2.0
     
@@ -51,17 +55,26 @@ for i, scene in enumerate(scenes_data):
         with open(vid_path, "wb") as f:
             f.write(requests.get(video_url).content)
             
-        clip = VideoFileClip(vid_path).subclip(0, scene_duration)
+        raw_clip = VideoFileClip(vid_path)
+        
+        # FIX: Agar Pexels clip scene se choti hai, toh usko freeze hone se bachane ke liye loop karo
+        if raw_clip.duration < scene_duration:
+            clip = raw_clip.fx(vfx.loop, duration=scene_duration)
+        else:
+            clip = raw_clip.subclip(0, scene_duration)
+            
+        # Resize and Crop properly
         clip = clip.resize(height=TARGET_H)
         if clip.w < TARGET_W:
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
+        # Slight zoom effect
         zoomed_clip = clip.resize(lambda t: 1.0 + 0.02 * (t / scene_duration)).set_position(('center', 'center'))
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.40).set_position(('center', 'center')).set_duration(scene_duration)
         
         words = text_line.split(' ')
-        chunk_size = 4 # Increased chunk size for landscape viewing
+        chunk_size = 4
         chunks = [' '.join(words[j:j + chunk_size]) for j in range(0, len(words), chunk_size)]
         
         word_clips = []
@@ -70,18 +83,18 @@ for i, scene in enumerate(scenes_data):
         for w_i, chunk in enumerate(chunks):
             current_color = viral_colors[w_i % len(viral_colors)]
             
-            # Adjusted font size and width for horizontal layout
+            # Background Text (Stroke/Shadow)
             bg_txt = TextClip(chunk, fontsize=90, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=12, method='caption', size=(1500, None))
             bg_txt = bg_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
+            # Main Text
             main_txt = TextClip(chunk, fontsize=90, color=current_color, font=HINDI_FONT_FILE, stroke_color='black', stroke_width=2, method='caption', size=(1500, None))
             main_txt = main_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
             word_clips.extend([bg_txt, main_txt])
         
+        # Combine Scene
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
-        if i > 0: final_scene = final_scene.crossfadein(0.5)
-            
         video_clips.append(final_scene)
         
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
@@ -92,17 +105,23 @@ for i, scene in enumerate(scenes_data):
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
-final_video = concatenate_videoclips(video_clips, padding=-0.5, method="compose")
+# FIX: Removed padding to sync perfectly with audio
+final_video = concatenate_videoclips(video_clips, method="compose")
 
 try:
     bgm = AudioFileClip("bgm.mp3").volumex(0.08)
-    if bgm.duration < final_video.duration: bgm = afx.audio_loop(bgm, duration=final_video.duration)
-    else: bgm = bgm.subclip(0, final_video.duration)
+    if bgm.duration < final_video.duration: 
+        bgm = afx.audio_loop(bgm, duration=final_video.duration)
+    else: 
+        bgm = bgm.subclip(0, final_video.duration)
     audio_clips.append(bgm)
 except: pass
 
 final_audio = CompositeAudioClip(audio_clips)
+
+# FIX: Ensure Video exactly matches Audio duration
 final_video = final_video.set_audio(final_audio)
+final_video = final_video.subclip(0, final_audio.duration)
 
 print("Rendering Final LONG Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2)
@@ -110,10 +129,7 @@ final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_co
 # --- THUMBNAIL GENERATION ---
 print("Generating AI Thumbnail with FLUX...")
 try:
-    # 1000/10 Quality aur MrBeast style ke liye naya prompt aur FLUX model
     encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, 8k resolution, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
-    
-    # URL me '&model=flux' add kiya gaya hai 3D text render karne ke liye
     thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true&model=flux"
     
     with open("thumbnail.jpg", "wb") as f:
@@ -125,7 +141,7 @@ except Exception as e:
     print(f"Thumbnail error: {e}")
     uploaded_thumb_link = "Failed"
 
-# --- VIDEO UPLOAD ---
+# --- VIDEO UPLOAD TO CATBOX (Temp Storage for n8n) ---
 try:
     files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
     video_link = requests.post("https://catbox.moe/user/api.php", files=files).text.strip()
@@ -142,5 +158,6 @@ payload = {
 if resume_url:
     try:
         requests.post(resume_url, json={"body": payload}, timeout=15)
+        print("Success: Resume payload sent to n8n.")
     except Exception as e:
         print(f"Warning: Failed to resume n8n. Error: {e}")
