@@ -1,15 +1,15 @@
-name: Render Automation Video
+name: Auto Render Hindi Facts Video
 
 on:
   repository_dispatch:
     types: [render_and_upload]
-  workflow_dispatch:
 
 jobs:
   build_video:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -17,22 +17,24 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies (For Subtitles)
+      - name: Install System Dependencies (FFmpeg & ImageMagick)
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick fonts-dejavu
-          sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"//g' /etc/ImageMagick-6/policy.xml
+          sudo apt-get install -y ffmpeg imagemagick
+          # ImageMagick policy fix so MoviePy can generate TextClips properly
+          sudo sed -i 's/none/read,write/g' /etc/ImageMagick-6/policy.xml
 
-      - name: Install Libraries
-        run: pip install requests moviepy==1.0.3 Pillow==9.5.0 edge-tts
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install moviepy==1.0.3 requests edge-tts urllib3
 
-      - name: Run Python Engine
+      - name: Run Video Rendering Script
         env:
           FULL_TEXT: ${{ github.event.client_payload.full_text }}
           SCENES_DATA: ${{ github.event.client_payload.scenes_data }}
-          THUMBNAIL_PROMPT: ${{ github.event.client_payload.thumbnail_prompt }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          THUMBNAIL_PROMPT: ${{ github.event.client_payload.thumbnail_prompt }}
           RESUME_URL: ${{ github.event.client_payload.resume_url }}
-          WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }} 
         run: python render_video.py
