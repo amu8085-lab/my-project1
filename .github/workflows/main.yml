@@ -27,7 +27,8 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install moviepy==1.0.3 requests edge-tts urllib3
+          # FIX YAHAN HAI: Pillow==9.5.0 add kiya gaya hai ANTIALIAS error theek karne ke liye
+          pip install moviepy==1.0.3 requests edge-tts urllib3 Pillow==9.5.0
 
       - name: Run Video Rendering Script
         env:
