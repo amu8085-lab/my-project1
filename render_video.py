@@ -2,10 +2,9 @@ import os, requests, json, subprocess, urllib.parse
 import moviepy.editor as mpe
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ColorClip
 
-# Font file check kar lijiye ki repo mein isi naam se hai
 HINDI_FONT_FILE = "Hindi.ttf" 
 
-# Environment Variables (GitHub Actions se aayenge)
+# Environment Variables
 full_text = os.environ.get('FULL_TEXT', 'Ek baar ki baat hai.')
 chat_id = os.environ.get('CHAT_ID')
 webhook_url = os.environ.get('WEBHOOK_URL')
@@ -33,8 +32,6 @@ except:
     whoosh_sfx = pop_sfx = None
 
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
-
-# Landscape Resolution for Long Form Video
 TARGET_W, TARGET_H = 1920, 1080
 
 # 2. Process Each Scene
@@ -42,34 +39,31 @@ for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'nature')
     text_line = scene.get('text', '')
     
-    # Calculate exact duration for this scene
     scene_duration = voiceover.duration * (len(text_line) / max(total_chars, 1))
     if scene_duration < 2.0: scene_duration = 2.0
     
     try:
-        # Pexels Landscape search
-        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
+        # FIX: Added timeout to Pexels Search
+        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers, timeout=15).json()
         video_url = res['videos'][0]['video_files'][0]['link']
         
         vid_path = f"vid_{i}.mp4"
         with open(vid_path, "wb") as f:
-            f.write(requests.get(video_url).content)
+            # FIX: Added timeout to Video Download
+            f.write(requests.get(video_url, timeout=30).content)
             
         raw_clip = VideoFileClip(vid_path)
         
-        # FIX: Agar Pexels clip scene se choti hai, toh usko freeze hone se bachane ke liye loop karo
         if raw_clip.duration < scene_duration:
             clip = raw_clip.fx(vfx.loop, duration=scene_duration)
         else:
             clip = raw_clip.subclip(0, scene_duration)
             
-        # Resize and Crop properly
         clip = clip.resize(height=TARGET_H)
         if clip.w < TARGET_W:
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
-        # Slight zoom effect & Dark Overlay
         zoomed_clip = clip.resize(lambda t: 1.0 + 0.02 * (t / scene_duration)).set_position(('center', 'center'))
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.40).set_position(('center', 'center')).set_duration(scene_duration)
         
@@ -83,17 +77,14 @@ for i, scene in enumerate(scenes_data):
         for w_i, chunk in enumerate(chunks):
             current_color = viral_colors[w_i % len(viral_colors)]
             
-            # Background Text (Stroke/Shadow)
             bg_txt = TextClip(chunk, fontsize=90, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=12, method='caption', size=(1500, None))
             bg_txt = bg_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
-            # Main Text
             main_txt = TextClip(chunk, fontsize=90, color=current_color, font=HINDI_FONT_FILE, stroke_color='black', stroke_width=2, method='caption', size=(1500, None))
             main_txt = main_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
             word_clips.extend([bg_txt, main_txt])
         
-        # Combine Scene
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
         video_clips.append(final_scene)
         
@@ -105,7 +96,6 @@ for i, scene in enumerate(scenes_data):
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
-# FIX: Removed padding to sync perfectly with audio
 final_video = concatenate_videoclips(video_clips, method="compose")
 
 try:
@@ -118,12 +108,9 @@ try:
 except: pass
 
 final_audio = CompositeAudioClip(audio_clips)
-
-# FIX: Ensure Video exactly matches Audio duration so it doesn't freeze at the end
 final_video = final_video.set_audio(final_audio)
 final_video = final_video.subclip(0, final_audio.duration)
 
-# FIX: Added preset and bitrate to reduce file size to upload successfully
 print("Rendering Final LONG Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, preset="fast", bitrate="3000k")
 
@@ -134,28 +121,23 @@ fallback_thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?widt
 
 try:
     with open("thumbnail.jpg", "wb") as f:
-        f.write(requests.get(fallback_thumb_url).content)
+        # FIX: Added timeout to Thumbnail download (This is likely where it hung)
+        f.write(requests.get(fallback_thumb_url, timeout=25).content)
     
     files_thumb = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('thumbnail.jpg', 'rb')}
+    uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb, timeout=30).text.strip()
     
-    # FIX: Added timeout so it doesn't hang forever
-    uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb, timeout=60).text.strip()
-    
-    # Agar catbox error de de toh direct AI ka link use karein
     if not uploaded_thumb_link.startswith("http"):
         uploaded_thumb_link = fallback_thumb_url
         
 except Exception as e:
     print(f"Thumbnail error: {e}")
-    # 'Failed' ki jagah ab humesha ek valid URL jayega
     uploaded_thumb_link = fallback_thumb_url 
 
-# --- VIDEO UPLOAD TO CATBOX (Temp Storage for n8n) ---
+# --- VIDEO UPLOAD TO CATBOX ---
 try:
     print("Uploading Video to Catbox...")
     files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
-    
-    # FIX: timeout=120 added to prevent infinite loop on big files
     video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=120).text.strip()
 except Exception as e: 
     print(f"Video upload error: {e}")
@@ -170,7 +152,6 @@ payload = {
 
 if resume_url:
     try:
-        # FIX: Added timeout to n8n webhook
         requests.post(resume_url, json={"body": payload}, timeout=30)
         print("Success: Resume payload sent to n8n.")
     except Exception as e:
