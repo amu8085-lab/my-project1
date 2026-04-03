@@ -123,8 +123,9 @@ final_audio = CompositeAudioClip(audio_clips)
 final_video = final_video.set_audio(final_audio)
 final_video = final_video.subclip(0, final_audio.duration)
 
+# FIX: Added preset and bitrate to reduce file size to upload successfully
 print("Rendering Final LONG Video...")
-final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2)
+final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, preset="fast", bitrate="3000k")
 
 # --- THUMBNAIL GENERATION ---
 print("Generating AI Thumbnail with FLUX...")
@@ -136,7 +137,9 @@ try:
         f.write(requests.get(fallback_thumb_url).content)
     
     files_thumb = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('thumbnail.jpg', 'rb')}
-    uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb).text.strip()
+    
+    # FIX: Added timeout so it doesn't hang forever
+    uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb, timeout=60).text.strip()
     
     # Agar catbox error de de toh direct AI ka link use karein
     if not uploaded_thumb_link.startswith("http"):
@@ -149,9 +152,13 @@ except Exception as e:
 
 # --- VIDEO UPLOAD TO CATBOX (Temp Storage for n8n) ---
 try:
+    print("Uploading Video to Catbox...")
     files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
-    video_link = requests.post("https://catbox.moe/user/api.php", files=files).text.strip()
-except: 
+    
+    # FIX: timeout=120 added to prevent infinite loop on big files
+    video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=120).text.strip()
+except Exception as e: 
+    print(f"Video upload error: {e}")
     video_link = "Upload Failed"
 
 payload = {
@@ -163,7 +170,8 @@ payload = {
 
 if resume_url:
     try:
-        requests.post(resume_url, json={"body": payload}, timeout=15)
+        # FIX: Added timeout to n8n webhook
+        requests.post(resume_url, json={"body": payload}, timeout=30)
         print("Success: Resume payload sent to n8n.")
     except Exception as e:
         print(f"Warning: Failed to resume n8n. Error: {e}")
