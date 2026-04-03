@@ -5,7 +5,7 @@ from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, Com
 # Font file check kar lijiye ki repo mein isi naam se hai
 HINDI_FONT_FILE = "Hindi.ttf" 
 
-# Environment Variables
+# Environment Variables (GitHub Actions se aayenge)
 full_text = os.environ.get('FULL_TEXT', 'Ek baar ki baat hai.')
 chat_id = os.environ.get('CHAT_ID')
 webhook_url = os.environ.get('WEBHOOK_URL')
@@ -69,7 +69,7 @@ for i, scene in enumerate(scenes_data):
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
-        # Slight zoom effect
+        # Slight zoom effect & Dark Overlay
         zoomed_clip = clip.resize(lambda t: 1.0 + 0.02 * (t / scene_duration)).set_position(('center', 'center'))
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.40).set_position(('center', 'center')).set_duration(scene_duration)
         
@@ -119,7 +119,7 @@ except: pass
 
 final_audio = CompositeAudioClip(audio_clips)
 
-# FIX: Ensure Video exactly matches Audio duration
+# FIX: Ensure Video exactly matches Audio duration so it doesn't freeze at the end
 final_video = final_video.set_audio(final_audio)
 final_video = final_video.subclip(0, final_audio.duration)
 
@@ -128,18 +128,24 @@ final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_co
 
 # --- THUMBNAIL GENERATION ---
 print("Generating AI Thumbnail with FLUX...")
+encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, 8k resolution, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
+fallback_thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true&model=flux"
+
 try:
-    encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, 8k resolution, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
-    thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true&model=flux"
-    
     with open("thumbnail.jpg", "wb") as f:
-        f.write(requests.get(thumb_url).content)
+        f.write(requests.get(fallback_thumb_url).content)
     
     files_thumb = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('thumbnail.jpg', 'rb')}
     uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb).text.strip()
+    
+    # Agar catbox error de de toh direct AI ka link use karein
+    if not uploaded_thumb_link.startswith("http"):
+        uploaded_thumb_link = fallback_thumb_url
+        
 except Exception as e:
     print(f"Thumbnail error: {e}")
-    uploaded_thumb_link = "Failed"
+    # 'Failed' ki jagah ab humesha ek valid URL jayega
+    uploaded_thumb_link = fallback_thumb_url 
 
 # --- VIDEO UPLOAD TO CATBOX (Temp Storage for n8n) ---
 try:
