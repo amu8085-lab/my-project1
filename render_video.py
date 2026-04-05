@@ -1,4 +1,4 @@
-import os, requests, json, subprocess, urllib.parse
+import os, requests, json, subprocess, urllib.parse, time
 import moviepy.editor as mpe
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ColorClip
 
@@ -137,8 +137,13 @@ payload = {
 }
 
 if resume_url:
-    try:
-        requests.post(resume_url, json={"body": payload}, timeout=30)
-        print("Success: Resume payload sent to n8n.")
-    except Exception as e:
-        print(f"Warning: Failed to resume n8n. Error: {e}")
+    print("Attempting to wake up n8n...")
+    # FIX: Retry System for Webhook to handle Hostinger network blocks
+    for attempt in range(5):
+        try:
+            requests.post(resume_url, json={"body": payload}, timeout=30)
+            print(f"Success: Resume payload sent to n8n on attempt {attempt + 1}.")
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1} Failed: {e}")
+            time.sleep(5)
