@@ -115,24 +115,10 @@ print("Rendering Final LONG Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, preset="fast", bitrate="3000k")
 
 # --- THUMBNAIL GENERATION ---
-print("Generating AI Thumbnail with FLUX...")
-encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, 8k resolution, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
-fallback_thumb_url = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1920&height=1080&nologo=true&model=flux"
-
-try:
-    with open("thumbnail.jpg", "wb") as f:
-        # FIX: Added timeout to Thumbnail download (This is likely where it hung)
-        f.write(requests.get(fallback_thumb_url, timeout=25).content)
-    
-    files_thumb = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('thumbnail.jpg', 'rb')}
-    uploaded_thumb_link = requests.post("https://catbox.moe/user/api.php", files=files_thumb, timeout=30).text.strip()
-    
-    if not uploaded_thumb_link.startswith("http"):
-        uploaded_thumb_link = fallback_thumb_url
-        
-except Exception as e:
-    print(f"Thumbnail error: {e}")
-    uploaded_thumb_link = fallback_thumb_url 
+print("Generating AI Thumbnail Link...")
+# FIX: Direct link creation (Size 1280x720 for YouTube limit, removed Catbox download/upload completely)
+encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
+uploaded_thumb_link = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1280&height=720&nologo=true&model=flux"
 
 # --- VIDEO UPLOAD TO CATBOX ---
 try:
