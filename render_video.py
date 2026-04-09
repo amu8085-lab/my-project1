@@ -43,14 +43,29 @@ for i, scene in enumerate(scenes_data):
     if scene_duration < 2.0: scene_duration = 2.0
     
     try:
-        # FIX: Added timeout to Pexels Search
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers, timeout=15).json()
-        video_url = res['videos'][0]['video_files'][0]['link']
+        
+        # FIX: Select stable HD video instead of massive 4K files
+        video_files = res['videos'][0]['video_files']
+        video_url = video_files[0]['link']
+        for vf in video_files:
+            if vf['quality'] == 'hd' and vf['width'] >= 1920:
+                video_url = vf['link']
+                break
         
         vid_path = f"vid_{i}.mp4"
-        with open(vid_path, "wb") as f:
-            # FIX: Added timeout to Video Download
-            f.write(requests.get(video_url, timeout=30).content)
+        print(f"Downloading Video {i}...")
+        
+        # FIX: Bulletproof download with Browser User-Agent to stop Pexels blocking
+        vid_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        vid_res = requests.get(video_url, headers=vid_headers, stream=True, timeout=60)
+        
+        if vid_res.status_code == 200:
+            with open(vid_path, "wb") as f:
+                for chunk in vid_res.iter_content(chunk_size=1024*1024):
+                    if chunk: f.write(chunk)
+        else:
+            raise Exception(f"Pexels Download Blocked! Status: {vid_res.status_code}")
             
         raw_clip = VideoFileClip(vid_path)
         
@@ -116,7 +131,6 @@ final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_co
 
 # --- THUMBNAIL GENERATION ---
 print("Generating AI Thumbnail Link...")
-# FIX: Direct link creation (Size 1280x720 for YouTube limit, removed Catbox download/upload completely)
 encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
 uploaded_thumb_link = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1280&height=720&nologo=true&model=flux"
 
@@ -138,7 +152,6 @@ payload = {
 
 if resume_url:
     print("Attempting to wake up n8n...")
-    # FIX: Retry System for Webhook to handle Hostinger network blocks
     for attempt in range(5):
         try:
             requests.post(resume_url, json={"body": payload}, timeout=30)
