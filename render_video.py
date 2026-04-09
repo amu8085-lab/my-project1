@@ -134,14 +134,22 @@ print("Generating AI Thumbnail Link...")
 encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
 uploaded_thumb_link = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1280&height=720&nologo=true&model=flux"
 
-# --- VIDEO UPLOAD TO CATBOX ---
+# --- VIDEO UPLOAD (WITH BACKUP SERVER) ---
+print("Uploading Video...")
+video_link = ""
 try:
-    print("Uploading Video to Catbox...")
+    print("Trying Server 1 (Catbox)...")
     files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
-    video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=120).text.strip()
-except Exception as e: 
-    print(f"Video upload error: {e}")
-    video_link = "Upload Failed"
+    video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=150).text.strip()
+    if not video_link.startswith("http"):
+        raise Exception("Catbox rejected the file.")
+except Exception as e:
+    print(f"Catbox failed: {e}. Switching to Backup Server (Transfer.sh)...")
+    try:
+        with open('final_video.mp4', 'rb') as f:
+            video_link = requests.put("https://transfer.sh/final_video.mp4", data=f, timeout=150).text.strip()
+    except Exception as e2:
+        print(f"Backup Server also failed: {e2}")
 
 payload = {
     "chat_id": chat_id, 
@@ -155,7 +163,7 @@ if resume_url:
     for attempt in range(5):
         try:
             requests.post(resume_url, json={"body": payload}, timeout=30)
-            print(f"Success: Resume payload sent to n8n on attempt {attempt + 1}.")
+            print(f"Success: Resume payload sent to n8n.")
             break
         except Exception as e:
             print(f"Attempt {attempt + 1} Failed: {e}")
