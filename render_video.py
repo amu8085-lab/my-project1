@@ -134,22 +134,26 @@ print("Generating AI Thumbnail Link...")
 encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
 uploaded_thumb_link = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1280&height=720&nologo=true&model=flux"
 
-# --- VIDEO UPLOAD (WITH BACKUP SERVER) ---
-print("Uploading Video...")
+# --- VIDEO UPLOAD (WITH TMPFILES.ORG - SUPER FAST) ---
+print("Uploading Video to secure server...")
 video_link = ""
 try:
-    print("Trying Server 1 (Catbox)...")
-    files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
-    video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=150).text.strip()
-    if not video_link.startswith("http"):
-        raise Exception("Catbox rejected the file.")
+    print("Trying Tmpfiles (Fast Server)...")
+    files = {'file': open('final_video.mp4', 'rb')}
+    upload_res = requests.post("https://tmpfiles.org/api/v1/upload", files=files, timeout=150).json()
+    if "data" in upload_res and "url" in upload_res["data"]:
+        # Direct download link banayein
+        video_link = upload_res["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        print(f"Success: {video_link}")
+    else:
+        raise Exception("Tmpfiles failed.")
 except Exception as e:
-    print(f"Catbox failed: {e}. Switching to Backup Server (Transfer.sh)...")
+    print(f"Tmpfiles failed: {e}. Switching to Catbox Backup...")
     try:
-        with open('final_video.mp4', 'rb') as f:
-            video_link = requests.put("https://transfer.sh/final_video.mp4", data=f, timeout=150).text.strip()
+        files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
+        video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=150).text.strip()
     except Exception as e2:
-        print(f"Backup Server also failed: {e2}")
+        print(f"Catbox also failed: {e2}")
 
 payload = {
     "chat_id": chat_id, 
