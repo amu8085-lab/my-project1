@@ -32,7 +32,7 @@ except:
 
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
 
-# 🌟 LONG VIDEO FORMAT (Horizontal 1920x1080)
+# LONG VIDEO FORMAT (Horizontal 1920x1080)
 TARGET_W, TARGET_H = 1920, 1080
 
 # 2. Process Each Scene
@@ -43,7 +43,6 @@ for i, scene in enumerate(scenes_data):
     if scene_duration < 1.0: scene_duration = 1.0
     
     try:
-        # Pexels API orientation=landscape for Long Videos
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
         video_url = res['videos'][0]['video_files'][0]['link']
         
@@ -61,7 +60,7 @@ for i, scene in enumerate(scenes_data):
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.35).set_position(('center', 'center')).set_duration(scene_duration)
         
         words = text_line.split(' ')
-        chunk_size = 3 # Thode zyada words screen par (horizontal video hai)
+        chunk_size = 3
         chunks = [' '.join(words[j:j + chunk_size]) for j in range(0, len(words), chunk_size)]
         
         word_clips = []
@@ -70,7 +69,6 @@ for i, scene in enumerate(scenes_data):
         for w_i, chunk in enumerate(chunks):
             current_color = viral_colors[w_i % len(viral_colors)]
             
-            # Adjusted text size for horizontal video
             bg_txt = TextClip(chunk, fontsize=100, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=15, method='caption', size=(1600, None))
             bg_txt = bg_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
@@ -79,12 +77,9 @@ for i, scene in enumerate(scenes_data):
             
             word_clips.extend([bg_txt, main_txt])
         
-        # Hard cut without crossfade for perfect sync
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
-            
         video_clips.append(final_scene)
         
-        # Audio Mix Timing
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
         if pop_sfx: audio_clips.append(pop_sfx.set_start(current_time + 0.1))
                 
@@ -93,7 +88,7 @@ for i, scene in enumerate(scenes_data):
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
-# Stitch Everything without padding to prevent freeze at the end
+# Stitch Everything
 final_video = concatenate_videoclips(video_clips, method="compose")
 
 # Progress Bar
@@ -115,34 +110,52 @@ except: pass
 final_audio = CompositeAudioClip(audio_clips)
 final_video = final_video.set_audio(final_audio)
 
-# 🌟 THE MAGICAL FIX: Rendering with Bitrate Compression so size stays under 50MB
+# 🌟 MAGICAL FIX: FAST RENDER & COMPRESSED SIZE (Ultrafast preset saves huge time!)
 print("Rendering Final COMPRESSED LONG Video...")
-final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, bitrate="1500k", preset="fast")
+final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, bitrate="1000k", preset="ultrafast")
 
-print("Uploading HEAVY video to cloud...")
+print("Starting 5-Layer Indestructible Upload System...")
 video_link = "Upload Failed"
 
-# 🌟 HEAVY VIDEO UPLOAD SYSTEM (With 600s Timeout)
-try:
-    print("Trying Tmpfiles API...")
-    res = requests.post("https://tmpfiles.org/api/v1/upload", files={'file': open('final_video.mp4', 'rb')}, timeout=600)
-    if res.status_code == 200:
-        original_url = res.json()['data']['url']
-        video_link = original_url.replace('tmpfiles.org/', 'tmpfiles.org/dl/')
-except Exception as e:
-    print(f"Tmpfiles failed: {e}")
+# LAYER 1: 0x0.st (Super reliable for servers)
+if not video_link.startswith("http"):
+    try:
+        print("Trying 0x0.st API...")
+        res = requests.post("https://0x0.st", files={'file': open('final_video.mp4', 'rb')}, timeout=600)
+        if res.text.startswith("http"): video_link = res.text.strip()
+    except Exception as e: print(f"0x0.st failed: {e}")
 
-# FALLBACK UPLOAD: Catbox.moe
+# LAYER 2: Uguu.se (Fast direct links)
+if not video_link.startswith("http"):
+    try:
+        print("Trying Uguu.se API...")
+        res = requests.post("https://uguu.se/upload.php", files={'files[]': open('final_video.mp4', 'rb')}, timeout=600)
+        if res.status_code == 200: video_link = res.json()['files'][0]['url']
+    except Exception as e: print(f"Uguu.se failed: {e}")
+
+# LAYER 3: Tmpfiles.org
+if not video_link.startswith("http"):
+    try:
+        print("Trying Tmpfiles API...")
+        res = requests.post("https://tmpfiles.org/api/v1/upload", files={'file': open('final_video.mp4', 'rb')}, timeout=600)
+        if res.status_code == 200: video_link = res.json()['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+    except Exception as e: print(f"Tmpfiles failed: {e}")
+
+# LAYER 4: Catbox.moe
 if not video_link.startswith("http"):
     try:
         print("Trying Catbox API...")
-        data = {'reqtype': 'fileupload'}
-        files = {'fileToUpload': open('final_video.mp4', 'rb')}
-        res = requests.post("https://catbox.moe/user/api.php", data=data, files=files, timeout=600)
-        if res.text.startswith("http"):
-            video_link = res.text.strip()
-    except Exception as e:
-        print(f"Catbox failed: {e}")
+        res = requests.post("https://catbox.moe/user/api.php", data={'reqtype': 'fileupload'}, files={'fileToUpload': open('final_video.mp4', 'rb')}, timeout=600)
+        if res.text.startswith("http"): video_link = res.text.strip()
+    except Exception as e: print(f"Catbox failed: {e}")
+
+# LAYER 5: Transfer.sh
+if not video_link.startswith("http"):
+    try:
+        print("Trying Transfer.sh API...")
+        res = requests.put("https://transfer.sh/final_video.mp4", data=open('final_video.mp4', 'rb'), timeout=600)
+        if res.text.startswith("http"): video_link = res.text.strip()
+    except Exception as e: print(f"Transfer.sh failed: {e}")
 
 # Notify Telegram & Resume n8n Wait Node
 print(f"🔥 FINAL YOUTUBE LINK: {video_link} 🔥")
