@@ -1,22 +1,21 @@
-import os, requests, json, subprocess, urllib.parse, time
+import os, requests, json, subprocess
 import moviepy.editor as mpe
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ColorClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ImageClip, ColorClip
 
 HINDI_FONT_FILE = "Hindi.ttf" 
 
-# Environment Variables
 full_text = os.environ.get('FULL_TEXT', 'Ek baar ki baat hai.')
 chat_id = os.environ.get('CHAT_ID')
 webhook_url = os.environ.get('WEBHOOK_URL')
 pexels_key = os.environ.get('PEXELS_API_KEY')
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
-thumbnail_prompt = os.environ.get('THUMBNAIL_PROMPT', 'Abstract mind blowing facts cinematic')
-resume_url = os.environ.get('RESUME_URL')
+resume_url = os.environ.get('RESUME_URL') # n8n Wait Node Resume URL
 
 print(f"Total Scenes to render: {len(scenes_data)}")
 
-# 1. AI Voiceover Generation
+# 1. FREE AI Voiceover
 subprocess.run(['edge-tts', '--voice', 'hi-IN-MadhurNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
+
 voiceover = AudioFileClip("voiceover.mp3")
 
 total_chars = sum(len(s['text']) for s in scenes_data)
@@ -32,58 +31,37 @@ except:
     whoosh_sfx = pop_sfx = None
 
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
+
+# 🌟 LONG VIDEO FORMAT (Horizontal 1920x1080)
 TARGET_W, TARGET_H = 1920, 1080
 
 # 2. Process Each Scene
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'nature')
     text_line = scene.get('text', '')
-    
     scene_duration = voiceover.duration * (len(text_line) / max(total_chars, 1))
-    if scene_duration < 2.0: scene_duration = 2.0
+    if scene_duration < 1.0: scene_duration = 1.0
     
     try:
-        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers, timeout=15).json()
-        
-        # FIX: Select stable HD video instead of massive 4K files
-        video_files = res['videos'][0]['video_files']
-        video_url = video_files[0]['link']
-        for vf in video_files:
-            if vf['quality'] == 'hd' and vf['width'] >= 1920:
-                video_url = vf['link']
-                break
+        # Pexels API orientation=landscape for Long Videos
+        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
+        video_url = res['videos'][0]['video_files'][0]['link']
         
         vid_path = f"vid_{i}.mp4"
-        print(f"Downloading Video {i}...")
-        
-        # FIX: Bulletproof download with Browser User-Agent to stop Pexels blocking
-        vid_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        vid_res = requests.get(video_url, headers=vid_headers, stream=True, timeout=60)
-        
-        if vid_res.status_code == 200:
-            with open(vid_path, "wb") as f:
-                for chunk in vid_res.iter_content(chunk_size=1024*1024):
-                    if chunk: f.write(chunk)
-        else:
-            raise Exception(f"Pexels Download Blocked! Status: {vid_res.status_code}")
+        with open(vid_path, "wb") as f:
+            f.write(requests.get(video_url).content)
             
-        raw_clip = VideoFileClip(vid_path)
-        
-        if raw_clip.duration < scene_duration:
-            clip = raw_clip.fx(vfx.loop, duration=scene_duration)
-        else:
-            clip = raw_clip.subclip(0, scene_duration)
-            
+        clip = VideoFileClip(vid_path).subclip(0, scene_duration)
         clip = clip.resize(height=TARGET_H)
         if clip.w < TARGET_W:
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
-        zoomed_clip = clip.resize(lambda t: 1.0 + 0.02 * (t / scene_duration)).set_position(('center', 'center'))
-        dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.40).set_position(('center', 'center')).set_duration(scene_duration)
+        zoomed_clip = clip.resize(lambda t: 1.0 + 0.04 * (t / scene_duration)).set_position(('center', 'center'))
+        dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.35).set_position(('center', 'center')).set_duration(scene_duration)
         
         words = text_line.split(' ')
-        chunk_size = 4
+        chunk_size = 3 # Thode zyada words screen par (horizontal video hai)
         chunks = [' '.join(words[j:j + chunk_size]) for j in range(0, len(words), chunk_size)]
         
         word_clips = []
@@ -92,17 +70,21 @@ for i, scene in enumerate(scenes_data):
         for w_i, chunk in enumerate(chunks):
             current_color = viral_colors[w_i % len(viral_colors)]
             
-            bg_txt = TextClip(chunk, fontsize=90, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=12, method='caption', size=(1500, None))
+            # Adjusted text size for horizontal video
+            bg_txt = TextClip(chunk, fontsize=100, color='black', font=HINDI_FONT_FILE, stroke_color='black', stroke_width=15, method='caption', size=(1600, None))
             bg_txt = bg_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
-            main_txt = TextClip(chunk, fontsize=90, color=current_color, font=HINDI_FONT_FILE, stroke_color='black', stroke_width=2, method='caption', size=(1500, None))
+            main_txt = TextClip(chunk, fontsize=100, color=current_color, font=HINDI_FONT_FILE, stroke_color='black', stroke_width=3, method='caption', size=(1600, None))
             main_txt = main_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             
             word_clips.extend([bg_txt, main_txt])
         
+        # Hard cut without crossfade for perfect sync
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
+            
         video_clips.append(final_scene)
         
+        # Audio Mix Timing
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
         if pop_sfx: audio_clips.append(pop_sfx.set_start(current_time + 0.1))
                 
@@ -111,64 +93,77 @@ for i, scene in enumerate(scenes_data):
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
+# Stitch Everything without padding to prevent freeze at the end
 final_video = concatenate_videoclips(video_clips, method="compose")
 
+# Progress Bar
+final_duration = final_video.duration
+progress_bar = ColorClip(size=(TARGET_W, 15), color=(255, 0, 0))
+progress_bar = progress_bar.set_position(lambda t: (-TARGET_W + int(TARGET_W * (t / max(final_duration, 1))), 'bottom'))
+progress_bar = progress_bar.set_duration(final_duration)
+
+final_video = CompositeVideoClip([final_video, progress_bar])
+
+# Background Music Mix
 try:
-    bgm = AudioFileClip("bgm.mp3").volumex(0.08)
-    if bgm.duration < final_video.duration: 
-        bgm = afx.audio_loop(bgm, duration=final_video.duration)
-    else: 
-        bgm = bgm.subclip(0, final_video.duration)
+    bgm = AudioFileClip("bgm.mp3").volumex(0.10)
+    if bgm.duration < final_video.duration: bgm = afx.audio_loop(bgm, duration=final_video.duration)
+    else: bgm = bgm.subclip(0, final_video.duration)
     audio_clips.append(bgm)
 except: pass
 
 final_audio = CompositeAudioClip(audio_clips)
 final_video = final_video.set_audio(final_audio)
-final_video = final_video.subclip(0, final_audio.duration)
 
-print("Rendering Final LONG Video...")
-final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, preset="fast", bitrate="3000k")
+# 🌟 THE MAGICAL FIX: Rendering with Bitrate Compression so size stays under 50MB
+print("Rendering Final COMPRESSED LONG Video...")
+final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, bitrate="1500k", preset="fast")
 
-# --- THUMBNAIL GENERATION ---
-print("Generating AI Thumbnail Link...")
-encoded_thumb = urllib.parse.quote(thumbnail_prompt + ", highly detailed, ultra vivid colors, extreme contrast, masterpiece, youtube thumbnail")
-uploaded_thumb_link = f"https://image.pollinations.ai/prompt/{encoded_thumb}?width=1280&height=720&nologo=true&model=flux"
+print("Uploading HEAVY video to cloud...")
+video_link = "Upload Failed"
 
-# --- VIDEO UPLOAD (WITH TMPFILES.ORG - SUPER FAST) ---
-print("Uploading Video to secure server...")
-video_link = ""
+# 🌟 HEAVY VIDEO UPLOAD SYSTEM (With 600s Timeout)
 try:
-    print("Trying Tmpfiles (Fast Server)...")
-    files = {'file': open('final_video.mp4', 'rb')}
-    upload_res = requests.post("https://tmpfiles.org/api/v1/upload", files=files, timeout=150).json()
-    if "data" in upload_res and "url" in upload_res["data"]:
-        # Direct download link banayein
-        video_link = upload_res["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
-        print(f"Success: {video_link}")
-    else:
-        raise Exception("Tmpfiles failed.")
+    print("Trying Tmpfiles API...")
+    res = requests.post("https://tmpfiles.org/api/v1/upload", files={'file': open('final_video.mp4', 'rb')}, timeout=600)
+    if res.status_code == 200:
+        original_url = res.json()['data']['url']
+        video_link = original_url.replace('tmpfiles.org/', 'tmpfiles.org/dl/')
 except Exception as e:
-    print(f"Tmpfiles failed: {e}. Switching to Catbox Backup...")
+    print(f"Tmpfiles failed: {e}")
+
+# FALLBACK UPLOAD: Catbox.moe
+if not video_link.startswith("http"):
     try:
-        files = {'reqtype': (None, 'fileupload'), 'fileToUpload': open('final_video.mp4', 'rb')}
-        video_link = requests.post("https://catbox.moe/user/api.php", files=files, timeout=150).text.strip()
-    except Exception as e2:
-        print(f"Catbox also failed: {e2}")
+        print("Trying Catbox API...")
+        data = {'reqtype': 'fileupload'}
+        files = {'fileToUpload': open('final_video.mp4', 'rb')}
+        res = requests.post("https://catbox.moe/user/api.php", data=data, files=files, timeout=600)
+        if res.text.startswith("http"):
+            video_link = res.text.strip()
+    except Exception as e:
+        print(f"Catbox failed: {e}")
+
+# Notify Telegram & Resume n8n Wait Node
+print(f"🔥 FINAL YOUTUBE LINK: {video_link} 🔥")
 
 payload = {
     "chat_id": chat_id, 
     "message": "👑 Bhai! 100M+ Views Long Video & Clickable Thumbnail Ready! 🔥", 
-    "youtube_url": video_link,
-    "thumbnail_url": uploaded_thumb_link
+    "youtube_url": video_link
 }
 
+try:
+    requests.post(webhook_url, json=payload, timeout=15)
+except Exception as e:
+    print(f"Warning: Standard Webhook unreachable. Error: {e}")
+
 if resume_url:
-    print("Attempting to wake up n8n...")
-    for attempt in range(5):
-        try:
-            requests.post(resume_url, json={"body": payload}, timeout=30)
-            print(f"Success: Resume payload sent to n8n.")
-            break
-        except Exception as e:
-            print(f"Attempt {attempt + 1} Failed: {e}")
-            time.sleep(5)
+    print(f"Resuming n8n workflow at: {resume_url}")
+    try:
+        response = requests.post(resume_url, json={"body": payload}, timeout=15)
+        print(f"n8n Resume Response: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Warning: Failed to resume n8n. Error: {e}")
+else:
+    print("No RESUME_URL provided by n8n. Skipping resume step.")
