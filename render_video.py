@@ -31,7 +31,6 @@ else:
 # --- FIX END ---
 
 total_chars = sum(len(s['text']) for s in scenes_data)
-video_clips = []
 audio_clips = [voiceover]
 headers = {"Authorization": pexels_key}
 current_time = 0.0
@@ -45,6 +44,10 @@ except:
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
 TARGET_W, TARGET_H = 1920, 1080
 
+# List to store our temporary rendered scene filenames
+rendered_scene_files = []
+raw_downloads = []
+
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'nature')
     text_line = scene.get('text', '')
@@ -55,9 +58,10 @@ for i, scene in enumerate(scenes_data):
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
         video_url = res['videos'][0]['video_files'][0]['link']
         
-        vid_path = f"vid_{i}.mp4"
+        vid_path = f"raw_vid_{i}.mp4"
         with open(vid_path, "wb") as f:
             f.write(requests.get(video_url).content)
+        raw_downloads.append(vid_path)
             
         clip = VideoFileClip(vid_path).subclip(0, scene_duration)
         clip = clip.resize(height=TARGET_H)
@@ -65,7 +69,8 @@ for i, scene in enumerate(scenes_data):
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
-        zoomed_clip = clip.resize(lambda t: 1.0 + 0.04 * (t / scene_duration)).set_position(('center', 'center'))
+        # MEMORY FIX: Replaced heavy dynamic lambda zoom with static scale
+        zoomed_clip = clip.resize(1.04).set_position(('center', 'center'))
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.35).set_position(('center', 'center')).set_duration(scene_duration)
         
         words = text_line.split(' ')
@@ -82,18 +87,36 @@ for i, scene in enumerate(scenes_data):
             main_txt = main_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             word_clips.extend([bg_txt, main_txt])
         
+        # Build the scene
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
-        video_clips.append(final_scene)
         
+        # MEMORY FIX: Render immediately to disk to prevent RAM crash
+        scene_filename = f"rendered_scene_{i}.mp4"
+        final_scene.write_videofile(scene_filename, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", logger=None)
+        rendered_scene_files.append(scene_filename)
+        
+        # MEMORY FIX: Force Garbage Collection (Free RAM)
+        final_scene.close()
+        zoomed_clip.close()
+        clip.close()
+        dark_overlay.close()
+        for w_clip in word_clips:
+            w_clip.close()
+        
+        # Handle Audio SFX
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
         if pop_sfx: audio_clips.append(pop_sfx.set_start(current_time + 0.1))
                 
         current_time += scene_duration
-        print(f"Scene {i+1} Ready: {keyword}")
+        print(f"Scene {i+1} Rendered to Disk: {keyword}")
+        
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
-final_video = concatenate_videoclips(video_clips, method="compose")
+# MEMORY FIX: Load the lightweight pre-rendered files from disk
+print("Concatenating all cached scenes...")
+disk_clips = [VideoFileClip(f) for f in rendered_scene_files]
+final_video = concatenate_videoclips(disk_clips)
 
 final_duration = final_video.duration
 progress_bar = ColorClip(size=(TARGET_W, 15), color=(255, 0, 0))
@@ -113,6 +136,12 @@ final_video = final_video.set_audio(final_audio)
 
 print("Rendering Final COMPRESSED LONG Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, bitrate="1000k", preset="ultrafast")
+
+# CLEANUP: Delete temporary chunks to save disk space
+for f in rendered_scene_files + raw_downloads:
+    try:
+        os.remove(f)
+    except: pass
 
 print("Starting 5-Layer Indestructible Upload System...")
 video_link = "Upload Failed"
