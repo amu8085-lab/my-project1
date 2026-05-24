@@ -3,14 +3,12 @@ name: Auto Render Hindi Facts Video
 on:
   repository_dispatch:
     types: [render_and_upload]
-  # Optional: Allow manual triggering from the GitHub Actions tab just in case
   workflow_dispatch:
 
 jobs:
   build_video:
     runs-on: ubuntu-latest
     
-    # Optional but recommended: Set a timeout so a stuck job doesn't burn all your free minutes
     timeout-minutes: 45
 
     steps:
@@ -21,24 +19,21 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          cache: 'pip' # Speeds up future runs by caching dependencies
+          # Removed cache: 'pip' from here so it doesn't look for requirements.txt
 
       - name: Install System Dependencies (FFmpeg & ImageMagick)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg imagemagick
-          # ImageMagick policy fix so MoviePy can generate TextClips properly
           sudo sed -i 's/none/read,write/g' /etc/ImageMagick-6/policy.xml
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Including Pillow==9.5.0 to fix the antialias error with MoviePy
           pip install moviepy==1.0.3 requests edge-tts urllib3 Pillow==9.5.0
 
       - name: Run Video Rendering Script
         env:
-          # Adding PYTHONUNBUFFERED=1 forces real-time logging so you don't have to wait to see output
           PYTHONUNBUFFERED: "1"
           FULL_TEXT: ${{ github.event.client_payload.full_text }}
           SCENES_DATA: ${{ github.event.client_payload.scenes_data }}
