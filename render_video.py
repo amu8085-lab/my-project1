@@ -1,7 +1,7 @@
 import os, requests, json, subprocess, socket
 import moviepy.editor as mpe
 import urllib3.util.connection as urllib3_cn
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, concatenate_videoclips, vfx, afx, ColorClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, vfx, afx, ColorClip
 
 # 🛡️ HACKER TRICK: Force IPv4 to bypass Hostinger "Network is unreachable" block
 def allowed_gai_family():
@@ -19,11 +19,11 @@ resume_url = os.environ.get('RESUME_URL')
 
 print(f"Total Scenes to render: {len(scenes_data)}")
 
+# Generate Voiceover
 subprocess.run(['edge-tts', '--voice', 'hi-IN-MadhurNeural', '--text', full_text, '--write-media', 'voiceover.mp3'])
 
 # --- FIX START: Audio Sync Problem Fix ---
 raw_voiceover = AudioFileClip("voiceover.mp3")
-# Edge-TTS ki shuruati khali aawaz (silence) ko 0.3 seconds trim kar rahe hain
 if raw_voiceover.duration > 1.0:
     voiceover = raw_voiceover.subclip(0.3)
 else:
@@ -44,10 +44,12 @@ except:
 viral_colors = ['#FFD400', '#00FFFF', '#FFFFFF', '#39FF14'] 
 TARGET_W, TARGET_H = 1920, 1080
 
-# List to store our temporary rendered scene filenames
 rendered_scene_files = []
 raw_downloads = []
 
+# ==========================================
+# PHASE 1: RENDER INDIVIDUAL SCENES TO DISK
+# ==========================================
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'nature')
     text_line = scene.get('text', '')
@@ -55,6 +57,7 @@ for i, scene in enumerate(scenes_data):
     if scene_duration < 1.0: scene_duration = 1.0
     
     try:
+        # Fetch Pexels Video
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
         video_url = res['videos'][0]['video_files'][0]['link']
         
@@ -69,10 +72,11 @@ for i, scene in enumerate(scenes_data):
             clip = clip.resize(width=TARGET_W)
         clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
-        # MEMORY FIX: Replaced heavy dynamic lambda zoom with static scale
+        # Static Zoom to save memory
         zoomed_clip = clip.resize(1.04).set_position(('center', 'center'))
         dark_overlay = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0)).set_opacity(0.35).set_position(('center', 'center')).set_duration(scene_duration)
         
+        # Text Generation
         words = text_line.split(' ')
         chunk_size = 3
         chunks = [' '.join(words[j:j + chunk_size]) for j in range(0, len(words), chunk_size)]
@@ -87,15 +91,14 @@ for i, scene in enumerate(scenes_data):
             main_txt = main_txt.set_position(('center', 'center')).set_duration(duration_per_chunk).set_start(w_i * duration_per_chunk)
             word_clips.extend([bg_txt, main_txt])
         
-        # Build the scene
         final_scene = CompositeVideoClip([zoomed_clip, dark_overlay] + word_clips, size=(TARGET_W, TARGET_H)).set_duration(scene_duration)
         
-        # MEMORY FIX: Render immediately to disk to prevent RAM crash
+        # Save to disk immediately
         scene_filename = f"rendered_scene_{i}.mp4"
         final_scene.write_videofile(scene_filename, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", logger=None)
         rendered_scene_files.append(scene_filename)
         
-        # MEMORY FIX: Force Garbage Collection (Free RAM)
+        # Free Memory
         final_scene.close()
         zoomed_clip.close()
         clip.close()
@@ -103,7 +106,7 @@ for i, scene in enumerate(scenes_data):
         for w_clip in word_clips:
             w_clip.close()
         
-        # Handle Audio SFX
+        # Collect Audio Timing
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
         if pop_sfx: audio_clips.append(pop_sfx.set_start(current_time + 0.1))
                 
@@ -113,10 +116,25 @@ for i, scene in enumerate(scenes_data):
     except Exception as e:
         print(f"Error on scene {i}: {e}")
 
-# MEMORY FIX: Load the lightweight pre-rendered files from disk
-print("Concatenating all cached scenes...")
-disk_clips = [VideoFileClip(f) for f in rendered_scene_files]
-final_video = concatenate_videoclips(disk_clips)
+# ==========================================
+# PHASE 2: INSTANT FFMPEG CONCATENATION
+# ==========================================
+print("Stitching all scenes instantly using FFmpeg Stream Copy...")
+with open("concat_list.txt", "w") as f:
+    for file in rendered_scene_files:
+        f.write(f"file '{os.path.abspath(file)}'\n")
+
+# This merges all MP4 chunks in seconds without re-encoding
+subprocess.run([
+    "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "concat_list.txt",
+    "-c", "copy", "raw_final.mp4"
+], check=True)
+
+# ==========================================
+# PHASE 3: FINAL TOUCHES (PROGRESS BAR & AUDIO)
+# ==========================================
+print("Adding Progress Bar and Final Audio Mix...")
+final_video = VideoFileClip("raw_final.mp4")
 
 final_duration = final_video.duration
 progress_bar = ColorClip(size=(TARGET_W, 15), color=(255, 0, 0))
@@ -134,15 +152,18 @@ except: pass
 final_audio = CompositeAudioClip(audio_clips)
 final_video = final_video.set_audio(final_audio)
 
-print("Rendering Final COMPRESSED LONG Video...")
+print("Rendering Final Outpost Video...")
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", threads=2, bitrate="1000k", preset="ultrafast")
 
-# CLEANUP: Delete temporary chunks to save disk space
-for f in rendered_scene_files + raw_downloads:
+# Cleanup
+for f in rendered_scene_files + raw_downloads + ["concat_list.txt", "raw_final.mp4"]:
     try:
         os.remove(f)
     except: pass
 
+# ==========================================
+# PHASE 4: MULTI-LAYER UPLOAD SYSTEM
+# ==========================================
 print("Starting 5-Layer Indestructible Upload System...")
 video_link = "Upload Failed"
 
@@ -182,7 +203,6 @@ payload = {
     "youtube_url": video_link
 }
 
-# 🛡️ HACKER TRICK: Chrome Browser Fake Header to bypass Hostinger WAF
 safe_headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
     'Accept': 'application/json'
