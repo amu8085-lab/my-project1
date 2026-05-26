@@ -1,4 +1,4 @@
-import os, requests, json, subprocess, socket
+import os, requests, json, subprocess, socket, time, gc
 import moviepy.editor as mpe
 import urllib3.util.connection as urllib3_cn
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, TextClip, vfx, afx, ColorClip
@@ -8,6 +8,7 @@ def allowed_gai_family():
     return socket.AF_INET
 urllib3_cn.allowed_gai_family = allowed_gai_family
 
+# CRITICAL: Ensure Hindi.ttf is uploaded to the root of your GitHub repository
 HINDI_FONT_FILE = "Hindi.ttf" 
 
 full_text = os.environ.get('FULL_TEXT', 'Ek baar ki baat hai.')
@@ -57,20 +58,34 @@ for i, scene in enumerate(scenes_data):
     if scene_duration < 1.0: scene_duration = 1.0
     
     try:
-        # Fetch Pexels Video
-        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers).json()
-        video_url = res['videos'][0]['video_files'][0]['link']
+        # FIX 1: Add a delay to prevent Pexels API rate limits (429 Too Many Requests)
+        time.sleep(1.5)
         
-        vid_path = f"raw_vid_{i}.mp4"
-        with open(vid_path, "wb") as f:
-            f.write(requests.get(video_url).content)
-        raw_downloads.append(vid_path)
-            
-        clip = VideoFileClip(vid_path).subclip(0, scene_duration)
-        clip = clip.resize(height=TARGET_H)
-        if clip.w < TARGET_W:
-            clip = clip.resize(width=TARGET_W)
-        clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
+        # Fetch Pexels Video safely
+        res_data = requests.get(f"https://api.pexels.com/videos/search?query={keyword}&per_page=1&orientation=landscape", headers=headers)
+        
+        # FIX 2: Safely handle missing videos or API blocks so audio doesn't desync
+        if res_data.status_code != 200:
+            print(f"Pexels API Error for '{keyword}': {res_data.status_code}. Using fallback background.")
+            clip = ColorClip(size=(TARGET_W, TARGET_H), color=(20, 20, 30)).set_duration(scene_duration)
+        else:
+            res = res_data.json()
+            if not res.get('videos'):
+                print(f"No videos found for keyword: {keyword}. Using fallback background.")
+                clip = ColorClip(size=(TARGET_W, TARGET_H), color=(20, 20, 30)).set_duration(scene_duration)
+            else:
+                video_url = res['videos'][0]['video_files'][0]['link']
+                vid_path = f"raw_vid_{i}.mp4"
+                
+                with open(vid_path, "wb") as f:
+                    f.write(requests.get(video_url).content)
+                raw_downloads.append(vid_path)
+                    
+                clip = VideoFileClip(vid_path).subclip(0, scene_duration)
+                clip = clip.resize(height=TARGET_H)
+                if clip.w < TARGET_W:
+                    clip = clip.resize(width=TARGET_W)
+                clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=TARGET_W, height=TARGET_H)
         
         # Static Zoom to save memory
         zoomed_clip = clip.resize(1.04).set_position(('center', 'center'))
@@ -98,13 +113,16 @@ for i, scene in enumerate(scenes_data):
         final_scene.write_videofile(scene_filename, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", logger=None)
         rendered_scene_files.append(scene_filename)
         
-        # Free Memory
+        # Free Memory to prevent GitHub Actions OOM crash
         final_scene.close()
         zoomed_clip.close()
         clip.close()
         dark_overlay.close()
         for w_clip in word_clips:
             w_clip.close()
+            
+        # FIX 3: Force garbage collection after every single scene
+        gc.collect()
         
         # Collect Audio Timing
         if whoosh_sfx: audio_clips.append(whoosh_sfx.set_start(current_time))
@@ -115,6 +133,8 @@ for i, scene in enumerate(scenes_data):
         
     except Exception as e:
         print(f"Error on scene {i}: {e}")
+        # Ensure audio timeline keeps advancing even if a chunk critically fails
+        current_time += scene_duration
 
 # ==========================================
 # PHASE 2: INSTANT FFMPEG CONCATENATION
