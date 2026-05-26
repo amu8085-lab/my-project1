@@ -9,7 +9,8 @@ jobs:
   build_video:
     runs-on: ubuntu-latest
     
-    timeout-minutes: 45
+    # Increased timeout to allow for full video rendering and API uploads
+    timeout-minutes: 120
 
     steps:
       - name: Checkout Code
