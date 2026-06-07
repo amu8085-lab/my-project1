@@ -2,7 +2,7 @@ import os, sys, requests, json, subprocess, socket, gc
 import urllib3.util.connection as urllib3_cn
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, ColorClip, afx, vfx
 
-# Force IPv4 to bypass strict server blocks
+# Force IPv4
 def allowed_gai_family():
     return socket.AF_INET
 urllib3_cn.allowed_gai_family = allowed_gai_family
@@ -37,9 +37,9 @@ for i, scene in enumerate(scenes_data):
     with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
     
     try:
-        # TTS Generate (Madhur Voice)
+        # Generate Audio (Madhur Voice)
         subprocess.run([sys.executable, '-m', 'edge_tts', '--voice', 'hi-IN-MadhurNeural', '--rate=+10%', '-f', temp_txt, '--write-media', f"raw_a_{i}.mp3"], check=True)
-        # Convert to WAV for perfect sync
+        # Convert to WAV for perfect synchronization
         subprocess.run(['ffmpeg', '-y', '-i', f"raw_a_{i}.mp3", '-ss', '0.2', '-c:a', 'pcm_s16le', audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         dur = AudioFileClip(audio_path).duration
@@ -52,6 +52,7 @@ for i, scene in enumerate(scenes_data):
         if vid_url:
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
+            
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
             if clip.duration < dur: clip = afx.vfx.loop(clip, duration=dur)
             
@@ -105,8 +106,17 @@ try:
     print(f"✅ Upload Success: {video_link}")
 except Exception as e: print(f"❌ Upload failed: {e}")
 
+# TELEGRAM BRIDGE
 BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 if video_link:
-    # URL extraction fix ensures this string is just the URL
-    msg = f"READY_TO_UPLOAD|{video_link}|{title[:50]}|{thumbnail_prompt[:100]}|{description[:100]}"
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
+    # Full data being sent now
+    msg = f"READY_TO_UPLOAD|{video_link}|{title}|{thumbnail_prompt}|{description}"
+    
+    # Send
+    resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:4090]})
+    if resp.status_code == 200:
+        print("✅ Telegram alert sent successfully!")
+    else:
+        print(f"❌ Telegram alert failed: {resp.text}")
+else:
+    print("❌ Could not send Telegram alert: video_link is empty.")
