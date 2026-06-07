@@ -105,6 +105,6 @@ final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_co
 # ... [Upload Logic Same as previous] ...
 
 # TELEGRAM BRIDGE (Fixed Message Length)
-BOT_TOKEN = "7707041789:AAFB0DUbGlypExkUjxm0qpJC60Cj5HFLd-E"
+BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 message_text = f"READY_TO_UPLOAD|{video_link}|{title[:50]}|{thumbnail_prompt[:100]}|{description[:100]}"
 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": message_text})
