@@ -11,6 +11,9 @@ chat_id = os.environ.get('CHAT_ID')
 
 rendered_videos = []
 rendered_audios = []
+total_video_duration = 0.0  # Tracker added
+
+print(f"DEBUG: Processing {len(scenes_data)} scenes from JSON.")
 
 # ==========================================
 # PHASE 1: RENDER SCENES
@@ -31,6 +34,8 @@ for i, scene in enumerate(scenes_data):
         subprocess.run(['ffmpeg', '-y', '-i', f"raw_a_{i}.mp3", '-ss', '0.2', '-c:a', 'pcm_s16le', audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         dur = AudioFileClip(audio_path).duration
+        total_video_duration += dur # Track total length
+        print(f"Scene {i+1} audio length: {dur:.2f} seconds")
         
         # Fetch Video
         res = requests.get(f"https://api.pexels.com/videos/search?query={keyword} space&per_page=1&orientation=landscape", headers={"Authorization": pexels_key}, timeout=10).json()
@@ -40,6 +45,7 @@ for i, scene in enumerate(scenes_data):
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
+            # Loop video if audio is longer (this makes longer scenes work seamlessly)
             if clip.duration < dur: clip = clip.loop(duration=dur)
             clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
             clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
@@ -55,6 +61,8 @@ for i, scene in enumerate(scenes_data):
         if os.path.exists(temp_txt): os.remove(temp_txt)
             
     except Exception as e: print(f"Error scene {i}: {e}")
+
+print(f"--- DEBUG: Estimated Total Video Duration: {total_video_duration / 60:.2f} Minutes ---")
 
 # ==========================================
 # PHASE 2: MERGE
