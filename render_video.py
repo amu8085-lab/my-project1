@@ -1,6 +1,6 @@
 import os, sys, requests, json, subprocess, socket, gc
 import urllib3.util.connection as urllib3_cn
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, ColorClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, ColorClip, afx, vfx
 
 # Force IPv4
 def allowed_gai_family():
@@ -15,6 +15,8 @@ title = os.environ.get('TITLE', 'Deep Space Mystery')
 description = os.environ.get('DESCRIPTION', 'Amazing space facts in Hindi.')
 thumbnail_prompt = os.environ.get('THUMBNAIL_PROMPT', 'Cinematic space thumbnail')
 
+print(f"Total Scenes to render: {len(scenes_data)}")
+
 TARGET_W, TARGET_H = 1920, 1080
 headers = {"Authorization": pexels_key}
 
@@ -23,41 +25,48 @@ rendered_audios = []
 scene_durations = []
 
 # ==========================================
-# PHASE 1: GENERATE ASSETS (NO TEXT)
+# PHASE 1: RENDER SCENES (Robust Mode)
 # ==========================================
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'space')
     text_line = scene.get('text', '').strip()
     if not text_line: continue
     
+    # Generate Audio
     audio_path = f"audio_{i}.wav"
     temp_txt = f"temp_{i}.txt"
     with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
     
     try:
-        # TTS Generate (Madhur Voice)
         subprocess.run([sys.executable, '-m', 'edge_tts', '--voice', 'hi-IN-MadhurNeural', '--rate=+10%', '-f', temp_txt, '--write-media', f"raw_a_{i}.mp3"], check=True)
-        # Convert to WAV
         subprocess.run(['ffmpeg', '-y', '-i', f"raw_a_{i}.mp3", '-ss', '0.2', '-c:a', 'pcm_s16le', audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         dur = AudioFileClip(audio_path).duration
         scene_durations.append(dur)
         
-        # Pexels Video Fetch
-        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword} space&per_page=1&orientation=landscape", headers=headers, timeout=15).json()
-        vid_url = res['videos'][0]['video_files'][0]['link'] if res.get('videos') else "https://www.pexels.com/"
+        # Fetch Video
+        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword} space&per_page=1&orientation=landscape", headers=headers, timeout=10).json()
+        vid_url = res['videos'][0]['video_files'][0]['link'] if res.get('videos') else None
         
+        # Download and Verify
         vid_path = f"raw_vid_{i}.mp4"
-        with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
+        success = False
+        if vid_url:
+            with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
+            if os.path.getsize(vid_path) > 1000: # Check if file is valid
+                success = True
         
-        clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
-        if clip.duration < dur: clip = clip.loop(duration=dur)
+        if success:
+            clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
+            if clip.duration < dur: clip = afx.vfx.loop(clip, duration=dur)
+            clip = clip.resize(height=TARGET_H).crop(x_center=clip.w/2, width=TARGET_W, height=TARGET_H)
+        else:
+            print(f"Using fallback background for scene {i}")
+            clip = ColorClip(size=(TARGET_W, TARGET_H), color=(0, 0, 0)).set_duration(dur)
         
-        # Resize/Crop for 1920x1080
-        clip = clip.resize(height=TARGET_H).crop(x_center=clip.w/2, width=TARGET_W, height=TARGET_H)
-        
-        # Compose Scene (Visuals only, no text)
-        final_scene = CompositeVideoClip([clip], size=(TARGET_W, TARGET_H)).set_duration(dur)
+        # Render visual without text
+        zoomed = clip.resize(lambda t: 1.0 + 0.03 * (t / dur)).set_position(('center', 'center'))
+        final_scene = CompositeVideoClip([zoomed], size=(TARGET_W, TARGET_H)).set_duration(dur)
         
         scene_filename = f"scene_{i}.mp4"
         final_scene.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
@@ -66,13 +75,18 @@ for i, scene in enumerate(scenes_data):
         rendered_audios.append(os.path.abspath(audio_path))
         
         final_scene.close(); clip.close(); gc.collect()
-        if os.path.exists(temp_txt): os.remove(temp_txt)
-        if os.path.exists(f"raw_a_{i}.mp3"): os.remove(f"raw_a_{i}.mp3")
+            
     except Exception as e: print(f"Error on scene {i}: {e}")
+    if os.path.exists(temp_txt): os.remove(temp_txt)
+    if os.path.exists(f"raw_a_{i}.mp3"): os.remove(f"raw_a_{i}.mp3")
 
 # ==========================================
 # PHASE 2: MERGE
 # ==========================================
+if not rendered_videos:
+    print("FATAL: No videos rendered.")
+    sys.exit(1)
+
 with open("vid_list.txt", "w") as f:
     for v in rendered_videos: f.write(f"file '{v}'\n")
 with open("aud_list.txt", "w") as f:
@@ -85,13 +99,13 @@ final_video = VideoFileClip("merged_video.mp4").set_audio(AudioFileClip("merged_
 final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", bitrate="2000k", preset="ultrafast")
 
 # ==========================================
-# UPLOAD & TELEGRAM
+# PHASE 3: UPLOAD
 # ==========================================
 video_link = None
 try:
     res = requests.post("https://uguu.se/upload.php", files={'files[]': open("final_video.mp4", 'rb')}, timeout=600)
     video_link = res.json()['files'][0]['url']
-except: pass
+except Exception as e: print(f"Upload failed: {e}")
 
 BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 if video_link:
