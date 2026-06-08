@@ -15,7 +15,7 @@ total_video_duration = 0.0
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes from JSON.")
 
-# Fallback keywords
+# Fallback keywords to ensure we ALWAYS get a space video
 FALLBACK_KEYWORDS = ["deep space universe", "galaxy stars", "milky way night sky", "nebula animation"]
 
 def fetch_pexels_video(keyword):
@@ -58,17 +58,20 @@ for i, scene in enumerate(scenes_data):
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
             clip = VideoFileClip(vid_path)
             
+            # Loop or cut video to perfectly match audio length
             if clip.duration < dur:
                 clip = clip.loop(duration=dur)
             else:
                 clip = clip.subclip(0, dur)
                 
+            # Resize and crop without borders
             if clip.w / clip.h > 1920 / 1080:
                 clip = clip.resize(height=1080)
             else:
                 clip = clip.resize(width=1920)
             clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=1920, height=1080)
             
+            # Force yuv420p to prevent YouTube black screen
             clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, ffmpeg_params=['-pix_fmt', 'yuv420p'], logger=None)
             clip.close()
             
@@ -117,23 +120,23 @@ else:
     subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
-# PHASE 3: UPLOAD TO GOFILE (Unlimited Size)
+# PHASE 3: UPLOAD TO TMPFILES (Direct MP4 Link)
 # ==========================================
 video_link = None
 try:
-    print("Uploading to Gofile.io...")
-    server_res = requests.get("https://api.gofile.io/servers").json()
-    if server_res.get('status') == 'ok':
-        server = server_res['data']['servers'][0]['name']
-        upload_res = requests.post(f"https://{server}.gofile.io/contents/uploadfile", files={'file': open("final_video.mp4", 'rb')}).json()
-        if upload_res.get('status') == 'ok':
-            video_link = upload_res['data']['downloadPage']
+    print("Uploading to Tmpfiles.org...")
+    upload_res = requests.post("https://tmpfiles.org/api/v1/upload", files={'file': open("final_video.mp4", 'rb')}).json()
+    
+    if upload_res.get('status') == 'success':
+        # API returns a web link; we convert it to a direct download link for n8n
+        video_link = upload_res['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+        print(f"Direct link generated: {video_link}")
 except Exception as e: 
     print(f"Upload failed: {e}")
 
 BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 
-# ALWAYS send a message, even if upload fails
+# Send final Webhook to Telegram
 if video_link:
     msg = f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
