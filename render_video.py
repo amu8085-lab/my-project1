@@ -1,19 +1,19 @@
 import os, sys, requests, json, subprocess, gc
 from moviepy.editor import VideoFileClip, AudioFileClip, ColorClip
 
-# --- SETTINGS ---
-chat_id = os.environ.get('CHAT_ID')
-pexels_key = os.environ.get('PEXELS_API_KEY')
+# --- VARIABLES ---
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
 title = os.environ.get('TITLE', 'Deep Space Mystery')
 description = os.environ.get('DESCRIPTION', 'Amazing space facts in Hindi.')
 thumbnail_prompt = os.environ.get('THUMBNAIL_PROMPT', 'Cinematic space thumbnail')
+pexels_key = os.environ.get('PEXELS_API_KEY')
+chat_id = os.environ.get('CHAT_ID')
 
 rendered_videos = []
 rendered_audios = []
 
 # ==========================================
-# PHASE 1: RENDER SCENES
+# PHASE 1: RENDER SCENES (Fixed Argument)
 # ==========================================
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'space')
@@ -22,12 +22,11 @@ for i, scene in enumerate(scenes_data):
     
     audio_path = os.path.abspath(f"audio_{i}.wav")
     scene_filename = os.path.abspath(f"scene_{i}.mp4")
-    temp_txt = f"temp_{i}.txt"
-    
-    with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
     
     try:
         # TTS Generate
+        temp_txt = f"temp_{i}.txt"
+        with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
         subprocess.run([sys.executable, '-m', 'edge_tts', '--voice', 'hi-IN-MadhurNeural', '--rate=+10%', '-f', temp_txt, '--write-media', f"raw_a_{i}.mp3"], check=True)
         subprocess.run(['ffmpeg', '-y', '-i', f"raw_a_{i}.mp3", '-ss', '0.2', '-c:a', 'pcm_s16le', audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
@@ -42,35 +41,42 @@ for i, scene in enumerate(scenes_data):
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
             if clip.duration < dur: clip = clip.loop(duration=dur)
-            # Resize and Force Even Dimensions
             clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
-            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None, force_divisible_by=2)
+            # Argument fixed here (removed force_divisible_by)
+            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
             clip.close()
         else:
-            ColorClip(size=(1920, 1080), color=(0,0,0), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None, force_divisible_by=2)
+            ColorClip(size=(1920, 1080), color=(0,0,0), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
         
         if os.path.exists(scene_filename):
             rendered_videos.append(scene_filename)
             rendered_audios.append(audio_path)
-            
+        
         gc.collect()
+        if os.path.exists(temp_txt): os.remove(temp_txt)
             
     except Exception as e: print(f"Error scene {i}: {e}")
-    if os.path.exists(temp_txt): os.remove(temp_txt)
 
 # ==========================================
-# PHASE 2: MERGE (Fixed Flags)
+# PHASE 2: MERGE (Fixed Syntax)
 # ==========================================
+if not rendered_videos:
+    print("FATAL ERROR: No videos rendered.")
+    sys.exit(1)
+
 with open("vid_list.txt", "w") as f:
     for v in rendered_videos: f.write(f"file '{v}'\n")
 with open("aud_list.txt", "w") as f:
     for a in rendered_audios: f.write(f"file '{a}'\n")
 
-# Use Correct Flags with hyphens!
+# Corrected subprocess flags with hyphens
+print("Merging Videos...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
+print("Merging Audio...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
 # Final Encoding
+print("Final Render...")
 subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
