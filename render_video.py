@@ -15,22 +15,19 @@ total_video_duration = 0.0
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes from JSON.")
 
-# Fallback keywords to ensure we ALWAYS get a space video, never a black screen
+# Fallback keywords
 FALLBACK_KEYWORDS = ["deep space universe", "galaxy stars", "milky way night sky", "nebula animation"]
 
 def fetch_pexels_video(keyword):
-    """Tries the primary keyword, then falls back to generic space keywords."""
     queries_to_try = [f"{keyword} space"] + FALLBACK_KEYWORDS
     for query in queries_to_try:
         try:
             res = requests.get(f"https://api.pexels.com/videos/search?query={query}&per_page=3&orientation=landscape", headers={"Authorization": pexels_key}, timeout=10).json()
             if res.get('videos') and len(res['videos']) > 0:
-                # Get the link for the first video found
                 return res['videos'][0]['video_files'][0]['link']
         except Exception as e:
-            print(f"Error fetching Pexels for query '{query}': {e}")
             continue
-    return None # Only returns None if all fallbacks fail (very rare)
+    return None
 
 # ==========================================
 # PHASE 1: RENDER SCENES
@@ -52,26 +49,18 @@ for i, scene in enumerate(scenes_data):
         
         dur = AudioFileClip(audio_path).duration
         total_video_duration += dur
-        print(f"Scene {i+1} ({keyword}) audio length: {dur:.2f} seconds")
         
-        # Fetch Video using the robust fallback function
+        # Fetch Video
         vid_url = fetch_pexels_video(keyword)
         
         if vid_url:
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
-            
-            # Open the downloaded clip
             clip = VideoFileClip(vid_path)
-            
-            # STRICT LENGTH MATCHING:
-            # If the downloaded video is shorter than the audio, loop it.
             if clip.duration < dur:
                 clip = clip.loop(duration=dur)
             else:
-                # If the video is longer, cut it to match the audio exactly
                 clip = clip.subclip(0, dur)
-                
             clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
             clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
             clip.close()
@@ -79,18 +68,14 @@ for i, scene in enumerate(scenes_data):
             if os.path.exists(scene_filename):
                 rendered_videos.append(scene_filename)
                 rendered_audios.append(audio_path)
-        else:
-             print(f"CRITICAL WARNING: No video found for scene {i+1} even after fallbacks. Scene skipped to prevent blank screen.")
         
         gc.collect()
         if os.path.exists(temp_txt): os.remove(temp_txt)
             
     except Exception as e: print(f"Error scene {i}: {e}")
 
-print(f"--- DEBUG: Estimated Total Video Duration: {total_video_duration / 60:.2f} Minutes ---")
-
 # ==========================================
-# PHASE 2: MERGE
+# PHASE 2: MERGE & ADD BGM
 # ==========================================
 if not rendered_videos:
     print("FATAL ERROR: No videos rendered.")
@@ -101,12 +86,27 @@ with open("vid_list.txt", "w") as f:
 with open("aud_list.txt", "w") as f:
     for a in rendered_audios: f.write(f"file '{a}'\n")
 
-# Use standard flags correctly
+# Combine Video and Audio parts
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
-# Final Encoding - High Quality for YT
-subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
+# ADD BGM LOGIC
+if os.path.exists("bgm.mp3"):
+    print("BGM file found. Mixing audio...")
+    subprocess.run([
+        'ffmpeg', '-y',
+        '-i', 'merged_video.mp4',
+        '-i', 'merged_audio.wav',
+        '-stream_loop', '-1', '-i', 'bgm.mp3', # Loop BGM if it's short
+        '-filter_complex', '[2:a]volume=0.08[bgm];[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+        '-map', '0:v', '-map', '[aout]',
+        '-c:v', 'libx264', '-crf', '18',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest', 'final_video.mp4'
+    ], check=True)
+else:
+    print("No bgm.mp3 found. Rendering without BGM...")
+    subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
 # PHASE 3: UPLOAD
@@ -117,7 +117,6 @@ try:
     video_link = res.json()['files'][0]['url']
 except Exception as e: print(f"Upload failed: {e}")
 
-BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 if video_link:
     msg = f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
+    requests.post(f"https://api.telegram.org/bot{chat_id}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
