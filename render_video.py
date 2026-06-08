@@ -13,7 +13,7 @@ rendered_videos = []
 rendered_audios = []
 
 # ==========================================
-# PHASE 1: RENDER SCENES (Fixed Argument)
+# PHASE 1: RENDER SCENES
 # ==========================================
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'space')
@@ -42,7 +42,6 @@ for i, scene in enumerate(scenes_data):
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
             if clip.duration < dur: clip = clip.loop(duration=dur)
             clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
-            # Argument fixed here (removed force_divisible_by)
             clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
             clip.close()
         else:
@@ -58,7 +57,7 @@ for i, scene in enumerate(scenes_data):
     except Exception as e: print(f"Error scene {i}: {e}")
 
 # ==========================================
-# PHASE 2: MERGE (Fixed Syntax)
+# PHASE 2: MERGE
 # ==========================================
 if not rendered_videos:
     print("FATAL ERROR: No videos rendered.")
@@ -69,14 +68,11 @@ with open("vid_list.txt", "w") as f:
 with open("aud_list.txt", "w") as f:
     for a in rendered_audios: f.write(f"file '{a}'\n")
 
-# Corrected subprocess flags with hyphens
-print("Merging Videos...")
+# Use standard flags correctly
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
-print("Merging Audio...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
-# Final Encoding
-print("Final Render...")
+# Final Encoding - High Quality for YT
 subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
