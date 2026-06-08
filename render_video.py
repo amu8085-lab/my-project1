@@ -1,5 +1,5 @@
 import os, sys, requests, json, subprocess, gc
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip, ColorClip
 
 # --- VARIABLES ---
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
@@ -57,17 +57,28 @@ for i, scene in enumerate(scenes_data):
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
             clip = VideoFileClip(vid_path)
+            
             if clip.duration < dur:
                 clip = clip.loop(duration=dur)
             else:
                 clip = clip.subclip(0, dur)
-            clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
-            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
+                
+            # Safe resize & crop logic to strictly fit 1920x1080 without black borders
+            if clip.w / clip.h > 1920 / 1080:
+                clip = clip.resize(height=1080)
+            else:
+                clip = clip.resize(width=1920)
+            clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=1920, height=1080)
+            
+            # -pix_fmt yuv420p forced here to fix YouTube black screen
+            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, ffmpeg_params=['-pix_fmt', 'yuv420p'], logger=None)
             clip.close()
             
             if os.path.exists(scene_filename):
                 rendered_videos.append(scene_filename)
                 rendered_audios.append(audio_path)
+        else:
+            ColorClip(size=(1920, 1080), color=(5, 5, 15), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, ffmpeg_params=['-pix_fmt', 'yuv420p'], logger=None)
         
         gc.collect()
         if os.path.exists(temp_txt): os.remove(temp_txt)
@@ -86,27 +97,26 @@ with open("vid_list.txt", "w") as f:
 with open("aud_list.txt", "w") as f:
     for a in rendered_audios: f.write(f"file '{a}'\n")
 
-# Combine Video and Audio parts
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
-# ADD BGM LOGIC
+# ADD BGM LOGIC & FORCE yuv420p FOR YOUTUBE
 if os.path.exists("bgm.mp3"):
     print("BGM file found. Mixing audio...")
     subprocess.run([
         'ffmpeg', '-y',
         '-i', 'merged_video.mp4',
         '-i', 'merged_audio.wav',
-        '-stream_loop', '-1', '-i', 'bgm.mp3', # Loop BGM if it's short
+        '-stream_loop', '-1', '-i', 'bgm.mp3', 
         '-filter_complex', '[2:a]volume=0.08[bgm];[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
         '-map', '0:v', '-map', '[aout]',
-        '-c:v', 'libx264', '-crf', '18',
+        '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k',
         '-shortest', 'final_video.mp4'
     ], check=True)
 else:
     print("No bgm.mp3 found. Rendering without BGM...")
-    subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
+    subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
 # PHASE 3: UPLOAD
@@ -117,6 +127,8 @@ try:
     video_link = res.json()['files'][0]['url']
 except Exception as e: print(f"Upload failed: {e}")
 
+BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
 if video_link:
     msg = f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"
-    requests.post(f"https://api.telegram.org/bot{chat_id}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
+    # FIX: bot{BOT_TOKEN} ka istemaal kiya gaya hai taki notification fail na ho
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
