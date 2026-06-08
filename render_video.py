@@ -1,36 +1,30 @@
-import os, sys, requests, json, subprocess, socket, gc
-import urllib3.util.connection as urllib3_cn
+import os, sys, requests, json, subprocess, gc
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, CompositeVideoClip, ColorClip
 
-def allowed_gai_family():
-    return socket.AF_INET
-urllib3_cn.allowed_gai_family = allowed_gai_family
-
 # --- VARIABLES ---
-chat_id = os.environ.get('CHAT_ID')
-pexels_key = os.environ.get('PEXELS_API_KEY')
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
 title = os.environ.get('TITLE', 'Deep Space Mystery')
 description = os.environ.get('DESCRIPTION', 'Amazing space facts in Hindi.')
 thumbnail_prompt = os.environ.get('THUMBNAIL_PROMPT', 'Cinematic space thumbnail')
-
-TARGET_W, TARGET_H = 1920, 1080
-headers = {"Authorization": pexels_key}
+pexels_key = os.environ.get('PEXELS_API_KEY')
+chat_id = os.environ.get('CHAT_ID')
 
 rendered_videos = []
 rendered_audios = []
 
 # ==========================================
-# PHASE 1: SMART-MATCH RENDERING
+# PHASE 1: RENDER SCENES (Path-Safe)
 # ==========================================
 for i, scene in enumerate(scenes_data):
-    # Dynamic Search Query: Keyword + first 30 chars of text for better match
-    search_query = f"{scene.get('keyword', 'space')} {scene.get('text', '')[:30]}"
+    keyword = scene.get('keyword', 'space')
     text_line = scene.get('text', '').strip()
     if not text_line: continue
     
-    audio_path = f"audio_{i}.wav"
+    # Files paths
+    audio_path = os.path.join(os.getcwd(), f"audio_{i}.wav")
+    scene_filename = os.path.join(os.getcwd(), f"scene_{i}.mp4")
     temp_txt = f"temp_{i}.txt"
+    
     with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
     
     try:
@@ -40,56 +34,51 @@ for i, scene in enumerate(scenes_data):
         
         dur = AudioFileClip(audio_path).duration
         
-        # Pexels Fetch with Smart Query
-        res = requests.get(f"https://api.pexels.com/videos/search?query={search_query}&per_page=1&orientation=landscape", headers=headers, timeout=10).json()
+        # Video Fetch
+        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword} space&per_page=1&orientation=landscape", headers={"Authorization": pexels_key}, timeout=10).json()
         vid_url = res['videos'][0]['video_files'][0]['link'] if res.get('videos') else None
-        
-        scene_filename = f"scene_{i}.mp4"
         
         if vid_url:
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
             if clip.duration < dur: clip = clip.loop(duration=dur)
-            clip = clip.resize(height=TARGET_H).crop(x_center=clip.w/2, width=TARGET_W, height=TARGET_H)
-            
-            # Use CRF 18 for visually lossless quality
-            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, ffmpeg_params=['-crf', '18'], logger=None)
+            clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
+            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
             clip.close()
         else:
-            ColorClip(size=(TARGET_W, TARGET_H), color=(10, 5, 20), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
+            ColorClip(size=(1920, 1080), color=(0,0,0), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
         
-        rendered_videos.append(os.path.abspath(scene_filename))
-        rendered_audios.append(os.path.abspath(audio_path))
+        # Verify file before adding to list
+        if os.path.exists(scene_filename):
+            rendered_videos.append(scene_filename)
+            rendered_audios.append(audio_path)
+            print(f"Scene {i} added: {scene_filename}")
+        
         gc.collect()
             
     except Exception as e: print(f"Error scene {i}: {e}")
+    if os.path.exists(temp_txt): os.remove(temp_txt)
 
 # ==========================================
-# PHASE 2: HIGH-BITRATE MERGE
+# PHASE 2: MERGE (Safe Check)
 # ==========================================
+if not rendered_videos:
+    print("FATAL: No scenes rendered. Exiting.")
+    sys.exit(1)
+
 with open("vid_list.txt", "w") as f:
     for v in rendered_videos: f.write(f"file '{v}'\n")
 with open("aud_list.txt", "w") as f:
     for a in rendered_audios: f.write(f"file '{a}'\n")
 
-# Use FFmpeg to merge with high quality settings
+print("Merging...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
-# Final Encoding with 5000k bitrate
-subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
+# Final render
+final_video = VideoFileClip("merged_video.mp4").set_audio(AudioFileClip("merged_audio.wav"))
+final_video.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", bitrate="2000k", preset="ultrafast")
 
-# ==========================================
-# PHASE 3: UPLOAD
-# ==========================================
-video_link = None
-try:
-    res = requests.post("https://uguu.se/upload.php", files={'files[]': open("final_video.mp4", 'rb')}, timeout=600)
-    video_link = res.json()['files'][0]['url']
-except: pass
-
-BOT_TOKEN = "8908652813:AAFsVizGGidc-SwVGN2azUr2mgNqA9Civ34"
-if video_link:
-    msg = f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": msg[:3990]})
+# UPLOAD & TELEGRAM
+# [Baaki upload logic waise hi rakhein]
