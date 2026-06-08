@@ -1,90 +1,94 @@
 import os, sys, requests, json, subprocess, gc
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, ColorClip, afx
+from moviepy.editor import VideoFileClip, AudioFileClip, ColorClip
 
 # --- VARIABLES ---
-chat_id = os.environ.get('CHAT_ID')
-pexels_key = os.environ.get('PEXELS_API_KEY')
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
 title = os.environ.get('TITLE', 'Deep Space Mystery')
 description = os.environ.get('DESCRIPTION', 'Amazing space facts in Hindi.')
 thumbnail_prompt = os.environ.get('THUMBNAIL_PROMPT', 'Cinematic space thumbnail')
+pexels_key = os.environ.get('PEXELS_API_KEY')
+chat_id = os.environ.get('CHAT_ID')
 
-TARGET_W, TARGET_H = 1920, 1080
 rendered_videos = []
 rendered_audios = []
 
-# --- CLEANUP OLD FILES ---
-for f in ["vid_list.txt", "aud_list.txt", "merged_video.mp4", "merged_audio.wav", "final_video.mp4"]:
-    if os.path.exists(f): os.remove(f)
-
 # ==========================================
-# PHASE 1: RENDER SCENES (Zero Text, High Quality)
+# PHASE 1: RENDER SCENES (Strict Pathing)
 # ==========================================
 for i, scene in enumerate(scenes_data):
     keyword = scene.get('keyword', 'space')
     text_line = scene.get('text', '').strip()
     if not text_line: continue
     
-    audio_path = f"audio_{i}.wav"
+    audio_path = os.path.abspath(f"audio_{i}.wav")
+    scene_filename = os.path.abspath(f"scene_{i}.mp4")
     temp_txt = f"temp_{i}.txt"
+    
     with open(temp_txt, "w", encoding="utf-8") as f: f.write(text_line)
     
     try:
-        # Generate Audio
+        # TTS Generate
         subprocess.run([sys.executable, '-m', 'edge_tts', '--voice', 'hi-IN-MadhurNeural', '--rate=+10%', '-f', temp_txt, '--write-media', f"raw_a_{i}.mp3"], check=True)
         subprocess.run(['ffmpeg', '-y', '-i', f"raw_a_{i}.mp3", '-ss', '0.2', '-c:a', 'pcm_s16le', audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         dur = AudioFileClip(audio_path).duration
         
-        # Pexels Video Fetch (Retry loop for quality)
-        vid_url = None
-        for q in [f"{keyword} space", "deep space galaxy", "stars universe"]:
-            res = requests.get(f"https://api.pexels.com/videos/search?query={q}&per_page=1&orientation=landscape", headers={"Authorization": pexels_key}, timeout=10).json()
-            if res.get('videos'):
-                vid_url = res['videos'][0]['video_files'][0]['link']
-                break
-        
-        scene_filename = f"scene_{i}.mp4"
+        # Fetch Video
+        res = requests.get(f"https://api.pexels.com/videos/search?query={keyword} space&per_page=1&orientation=landscape", headers={"Authorization": pexels_key}, timeout=10).json()
+        vid_url = res['videos'][0]['video_files'][0]['link'] if res.get('videos') else None
         
         if vid_url:
             vid_path = f"raw_vid_{i}.mp4"
             with open(vid_path, "wb") as f: f.write(requests.get(vid_url, timeout=30).content)
-            
             clip = VideoFileClip(vid_path).subclip(0, min(dur, VideoFileClip(vid_path).duration))
             if clip.duration < dur: clip = clip.loop(duration=dur)
-            # High Quality Resize
-            clip = clip.resize(height=TARGET_H).crop(x_center=clip.w/2, width=TARGET_W, height=TARGET_H)
-            
-            # Write to disk with High Bitrate
-            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, ffmpeg_params=['-crf', '18'], logger=None)
+            clip = clip.resize(height=1080).crop(x_center=clip.w/2, width=1920, height=1080)
+            clip.write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
             clip.close()
         else:
-            ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
+            ColorClip(size=(1920, 1080), color=(0,0,0), duration=dur).write_videofile(scene_filename, fps=24, codec="libx264", audio=False, logger=None)
         
-        rendered_videos.append(scene_filename)
-        rendered_audios.append(audio_path)
+        if os.path.exists(scene_filename):
+            rendered_videos.append(scene_filename)
+            rendered_audios.append(audio_path)
+            print(f"DEBUG: Successfully added {scene_filename}")
+        
         gc.collect()
             
     except Exception as e: print(f"Error scene {i}: {e}")
     if os.path.exists(temp_txt): os.remove(temp_txt)
-    if os.path.exists(f"raw_a_{i}.mp3"): os.remove(f"raw_a_{i}.mp3")
 
 # ==========================================
-# PHASE 2: MERGE (FFMPEG CONCAT)
+# PHASE 2: MERGE (Verifying Inputs)
 # ==========================================
+if not rendered_videos:
+    print("FATAL ERROR: No videos rendered.")
+    sys.exit(1)
+
+# Write concat list with absolute paths
 with open("vid_list.txt", "w") as f:
-    for v in rendered_videos: f.write(f"file '{v}'\n")
-with open("aud_list.txt", "w") as f:
-    for a in rendered_audios: f.write(f"file '{a}'\n")
+    for v in rendered_videos: 
+        if os.path.exists(v):
+            f.write(f"file '{v}'\n")
+        else:
+            print(f"CRITICAL ERROR: File not found: {v}")
 
+with open("aud_list.txt", "w") as f:
+    for a in rendered_audios: 
+        f.write(f"file '{a}'\n")
+
+# Use correct flags (-i and -c)
+print("Merging Videos...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'merged_video.mp4'], check=True)
+print("Merging Audio...")
 subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c', 'pcm_s16le', 'merged_audio.wav'], check=True)
 
-# Final Render (High Bitrate for YT)
+# Final Encoding
+print("Final Render...")
 subprocess.run(['ffmpeg', '-y', '-i', 'merged_video.mp4', '-i', 'merged_audio.wav', '-c:v', 'libx264', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', 'final_video.mp4'], check=True)
 
 # ==========================================
-# PHASE 3: UPLOAD & TELEGRAM
+# PHASE 3: UPLOAD
 # ==========================================
 video_link = None
 try:
