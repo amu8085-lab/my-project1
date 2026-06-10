@@ -1,5 +1,6 @@
-import os, sys, requests, json, subprocess, time, random
-import concurrent.futures
+import os, sys, json, subprocess, time, random, asyncio
+import aiohttp
+import edge_tts
 
 # --- VARIABLES ---
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
@@ -10,67 +11,71 @@ pexels_key = os.environ.get('PEXELS_API_KEY')
 chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
-print(f"DEBUG: Processing {len(scenes_data)} scenes.")
+print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
 FALLBACK_KEYWORDS = ["deep space universe", "galaxy stars", "milky way night sky", "nebula animation"]
 
-def fetch_pexels_video(keyword):
+# Use Linux RAM Disk if available for extreme speed, else use current dir
+TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
+
+async def fetch_pexels_video(session, keyword):
     queries_to_try = [f"{keyword} space"] + FALLBACK_KEYWORDS
     for query in queries_to_try:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                time.sleep(random.uniform(0.5, 1.5))
+                await asyncio.sleep(random.uniform(0.1, 0.5))
                 random_page = random.randint(1, 5) 
-                # OPTIMIZATION 1: Added &size=medium to stop fetching massive 4K raw files
+                # Fetching medium size to save massive bandwidth & memory
                 url = f"https://api.pexels.com/videos/search?query={query}&per_page=5&page={random_page}&orientation=landscape&size=medium"
-                res = requests.get(url, headers={"Authorization": pexels_key}, timeout=10).json()
                 
-                if res.get('videos') and len(res['videos']) > 0:
-                    return random.choice(res['videos'])['video_files'][0]['link']
-            except requests.RequestException: 
+                async with session.get(url, headers={"Authorization": pexels_key}, timeout=10) as response:
+                    if response.status == 200:
+                        res = await response.json()
+                        if res.get('videos') and len(res['videos']) > 0:
+                            return random.choice(res['videos'])['video_files'][0]['link']
+            except Exception:
                 continue
     return None
 
-def get_audio_duration(file_path):
+async def get_audio_duration(file_path):
     cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, _ = await proc.communicate()
     try:
-        return float(subprocess.check_output(cmd).decode().strip())
+        return float(stdout.decode().strip())
     except:
         return 5.0 
 
 # ==========================================
-# PHASE 1: RENDER SCENES (STREAMLINED I/O)
+# PHASE 1: ASYNC SCENE GENERATION
 # ==========================================
-def process_scene(i, scene):
+async def process_scene(session, i, scene):
     keyword = scene.get('keyword', 'space')
     text_line = scene.get('text', '').strip()
-    if not text_line: 
-        return None
+    if not text_line: return None
     
-    scene_filename = os.path.abspath(f"scene_{i}.mp4")
-    raw_mp3 = f"raw_a_{i}.mp3"
-    temp_txt = f"temp_{i}.txt"
-    vid_path = f"raw_vid_{i}.mp4"
+    scene_filename = os.path.join(TEMP_DIR, f"scene_{i}.mp4")
+    raw_mp3 = os.path.join(TEMP_DIR, f"raw_a_{i}.mp3")
+    vid_path = os.path.join(TEMP_DIR, f"raw_vid_{i}.mp4")
     
     try:
-        # Generate Text-to-Speech MP3
-        with open(temp_txt, "w", encoding="utf-8") as f: 
-            f.write(text_line)
-        subprocess.run([sys.executable, '-m', 'edge_tts', '--voice', 'hi-IN-MadhurNeural', '--rate=+10%', '-f', temp_txt, '--write-media', raw_mp3], check=True)
+        # 1. Native Async TTS (No Subprocess overhead)
+        communicate = edge_tts.Communicate(text_line, "hi-IN-MadhurNeural", rate="+10%")
+        await communicate.save(raw_mp3)
         
-        # OPTIMIZATION 2: Removed intermediate .wav conversion. Reading duration directly from MP3.
-        # Edge-TTS adds a slight delay at the start, we account for 0.2s clipping.
-        raw_dur = get_audio_duration(raw_mp3)
+        raw_dur = await get_audio_duration(raw_mp3)
         dur = max(1.0, raw_dur - 0.2) 
         fade_out = max(0, dur - 0.5)
         
-        vid_url = fetch_pexels_video(keyword)
-        
+        # 2. Async Video Download
+        vid_url = await fetch_pexels_video(session, keyword)
         if vid_url:
-            with open(vid_path, "wb") as f: 
-                f.write(requests.get(vid_url, timeout=30).content)
-                
-            # Feed raw MP3 directly into FFmpeg and trim 0.2s on the fly
+            async with session.get(vid_url) as resp:
+                if resp.status == 200:
+                    with open(vid_path, "wb") as f:
+                        f.write(await resp.read())
+                        
+            # 3. Async FFmpeg Processing
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-stream_loop', '-1', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3,
                 '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
@@ -87,80 +92,109 @@ def process_scene(i, scene):
                 '-t', str(dur), scene_filename
             ]
             
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        await proc.communicate()
+        
         return {"vid": scene_filename, "aud": raw_mp3, "index": i}
         
     except Exception as e: 
         print(f"Error in scene {i}: {str(e)}")
         return None
-        
     finally:
-        # Cleanup
-        for f in [temp_txt, vid_path]: # raw_mp3 is kept for final merge, deleted later
-            if os.path.exists(f): 
-                os.remove(f)
+        if os.path.exists(vid_path): os.remove(vid_path)
 
-results = []
-with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-    futures = [executor.submit(process_scene, i, scene) for i, scene in enumerate(scenes_data)]
-    for future in concurrent.futures.as_completed(futures):
-        res = future.result()
-        if res: results.append(res)
-
-results = sorted(results, key=lambda x: x['index'])
-
-with open("vid_list.txt", "w") as f:
-    for r in results: f.write(f"file '{r['vid']}'\n")
-with open("aud_list.txt", "w") as f:
-    for r in results: f.write(f"file '{r['aud']}'\n")
-
-# ==========================================
-# PHASE 2: MERGE & BGM
-# ==========================================
-subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'vid_list.txt', '-c', 'copy', 'raw_merged.mp4'], check=True)
-# Directly concat MP3s into final audio format
-subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', 'aud_list.txt', '-c:a', 'aac', '-b:a', '128k', 'merged_audio.aac'], check=True)
-
-cmd = ['ffmpeg', '-y', '-i', 'raw_merged.mp4', '-i', 'merged_audio.aac']
-if os.path.exists("bgm.mp3"):
-    cmd += ['-stream_loop', '-1', '-i', 'bgm.mp3', '-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[2:a]volume=0.08[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]', '-map', '[vout]', '-map', '[aout]']
-else:
-    cmd += ['-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]', '-map', '[vout]', '-map', '[aout]']
-
-cmd += ['-c:v', 'libx264', '-crf', '28', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-shortest', 'final_video.mp4']
-subprocess.run(cmd, check=True)
-
-# Final MP3 cleanup
-for r in results:
-    if os.path.exists(r['aud']): os.remove(r['aud'])
-
-# ==========================================
-# PHASE 3: MULTI-SERVER UPLOAD 
-# ==========================================
-video_link = None
-for url in ["https://tmpfiles.org/api/v1/upload", "https://litterbox.catbox.moe/resources/internals/api.php"]:
-    try:
-        files = {'fileToUpload' if "litterbox" in url else 'file': open("final_video.mp4", 'rb')}
-        data = {'reqtype': 'fileupload', 'time': '12h'} if "litterbox" in url else None
-        res = requests.post(url, files=files, data=data, timeout=600)
+async def main_pipeline():
+    async with aiohttp.ClientSession() as session:
+        # Run all scenes concurrently using AsyncIO
+        tasks = [process_scene(session, i, scene) for i, scene in enumerate(scenes_data)]
+        results = await asyncio.gather(*tasks)
         
-        if "litterbox" in url and res.status_code == 200 and res.text.startswith("http"): 
-            video_link = res.text.strip()
-        elif "tmpfiles" in url and res.json().get('status') == 'success': 
-            video_link = res.json()['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
-            
-        if video_link: break
-    except Exception as e: 
-        print(f"Upload failed for {url}: {str(e)}")
-        continue
+        results = sorted([r for r in results if r], key=lambda x: x['index'])
 
-# ==========================================
-# PHASE 4: TELEGRAM NOTIFICATION
-# ==========================================
-if telegram_token:
-    if video_link:
-        requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json={"chat_id": chat_id, "text": f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"})
-    else:
-        requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, GitHub Actions check karein."})
-else:
-    print("CRITICAL WARNING: Telegram token missing. Cannot send notification.")
+        vid_list_path = os.path.join(TEMP_DIR, "vid_list.txt")
+        aud_list_path = os.path.join(TEMP_DIR, "aud_list.txt")
+        
+        with open(vid_list_path, "w") as f:
+            for r in results: f.write(f"file '{r['vid']}'\n")
+        with open(aud_list_path, "w") as f:
+            for r in results: f.write(f"file '{r['aud']}'\n")
+
+        # ==========================================
+        # PHASE 2: MERGE & BGM
+        # ==========================================
+        raw_merged = os.path.join(TEMP_DIR, 'raw_merged.mp4')
+        merged_audio = os.path.join(TEMP_DIR, 'merged_audio.aac')
+        final_video = 'final_video.mp4' # Kept in current dir for easy upload access
+        
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_merged], check=True)
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '128k', merged_audio], check=True)
+
+        cmd = ['ffmpeg', '-y', '-i', raw_merged, '-i', merged_audio]
+        if os.path.exists("bgm.mp3"):
+            cmd += ['-stream_loop', '-1', '-i', 'bgm.mp3', '-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[2:a]volume=0.08[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]', '-map', '[vout]', '-map', '[aout]']
+        else:
+            cmd += ['-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]', '-map', '[vout]', '-map', '[aout]']
+
+        cmd += ['-c:v', 'libx264', '-crf', '28', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-shortest', final_video]
+        subprocess.run(cmd, check=True)
+
+        # Cleanup all temp files
+        for f in [vid_list_path, aud_list_path, raw_merged, merged_audio] + [r['vid'] for r in results] + [r['aud'] for r in results]:
+            if os.path.exists(f): os.remove(f)
+
+        # ==========================================
+        # PHASE 3: ASYNC MULTI-SERVER UPLOAD
+        # ==========================================
+        video_link = None
+        for url in ["https://tmpfiles.org/api/v1/upload", "https://litterbox.catbox.moe/resources/internals/api.php"]:
+            try:
+                # Using aiohttp for uploading large files safely
+                with open(final_video, 'rb') as f:
+                    data = aiohttp.FormData()
+                    if "litterbox" in url:
+                        data.add_field('reqtype', 'fileupload')
+                        data.add_field('time', '12h')
+                        data.add_field('fileToUpload', f, filename='final_video.mp4')
+                    else:
+                        data.add_field('file', f, filename='final_video.mp4')
+                    
+                    async with session.post(url, data=data, timeout=600) as resp:
+                        resp_text = await resp.text()
+                        if "litterbox" in url and resp.status == 200 and resp_text.startswith("http"):
+                            video_link = resp_text.strip()
+                        elif "tmpfiles" in url:
+                            js = json.loads(resp_text)
+                            if js.get('status') == 'success':
+                                video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                if video_link: break
+            except Exception as e:
+                print(f"Upload failed for {url}: {str(e)}")
+                continue
+
+        # ==========================================
+        # PHASE 4: TELEGRAM NOTIFICATION (DEBUG FIX)
+        # ==========================================
+        if telegram_token:
+            if video_link:
+                payload = {"chat_id": chat_id, "text": f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"}
+            else:
+                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, GitHub Actions check karein."}
+            
+            try:
+                # Properly awaiting the response and keeping connection alive for debugging
+                async with session.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json=payload) as resp:
+                    resp_text = await resp.text()
+                    print(f"\n--- TELEGRAM DEBUG ---")
+                    print(f"Status Code: {resp.status}")
+                    print(f"Response: {resp_text}")
+                    print(f"----------------------\n")
+            except Exception as e:
+                print(f"CRITICAL: Telegram API error - {str(e)}")
+        else:
+            print("CRITICAL WARNING: Telegram token missing. Cannot send notification.")
+
+if __name__ == "__main__":
+    # Required to prevent issues on Windows if you test locally
+    if sys.platform.startswith('win'):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main_pipeline())
