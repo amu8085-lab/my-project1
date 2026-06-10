@@ -75,20 +75,20 @@ async def process_scene(session, i, scene):
                     with open(vid_path, "wb") as f:
                         f.write(await resp.read())
                         
-            # 3. Async FFmpeg Processing
+            # 3. Async FFmpeg Processing (High compression on individual scenes)
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-stream_loop', '-1', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3,
                 '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
                 '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
-                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', 
+                '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
             ]
         else:
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#05050f:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3,
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+                '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
             ]
             
@@ -127,7 +127,7 @@ async def main_pipeline():
         final_video = 'final_video.mp4' # Kept in current dir for easy upload access
         
         subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_merged], check=True)
-        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '128k', merged_audio], check=True)
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '96k', merged_audio], check=True)
 
         cmd = ['ffmpeg', '-y', '-i', raw_merged, '-i', merged_audio]
         if os.path.exists("bgm.mp3"):
@@ -135,7 +135,9 @@ async def main_pipeline():
         else:
             cmd += ['-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]', '-map', '[vout]', '-map', '[aout]']
 
-        cmd += ['-c:v', 'libx264', '-crf', '28', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-shortest', final_video]
+        # ULTRA COMPRESSION FIX TO BYPASS 100MB LIMIT AND n8n TIMEOUT
+        # Changed CRF to 32 and Audio Bitrate to 96k
+        cmd += ['-c:v', 'libx264', '-crf', '32', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-shortest', final_video]
         subprocess.run(cmd, check=True)
 
         # Cleanup all temp files
@@ -148,7 +150,6 @@ async def main_pipeline():
         video_link = None
         for url in ["https://tmpfiles.org/api/v1/upload", "https://litterbox.catbox.moe/resources/internals/api.php"]:
             try:
-                # Using aiohttp for uploading large files safely
                 with open(final_video, 'rb') as f:
                     data = aiohttp.FormData()
                     if "litterbox" in url:
@@ -181,7 +182,6 @@ async def main_pipeline():
                 payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, GitHub Actions check karein."}
             
             try:
-                # Properly awaiting the response and keeping connection alive for debugging
                 async with session.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json=payload) as resp:
                     resp_text = await resp.text()
                     print(f"\n--- TELEGRAM DEBUG ---")
@@ -194,7 +194,6 @@ async def main_pipeline():
             print("CRITICAL WARNING: Telegram token missing. Cannot send notification.")
 
 if __name__ == "__main__":
-    # Required to prevent issues on Windows if you test locally
     if sys.platform.startswith('win'):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main_pipeline())
