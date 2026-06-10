@@ -60,9 +60,22 @@ async def process_scene(session, i, scene):
     vid_path = os.path.join(TEMP_DIR, f"raw_vid_{i}.mp4")
     
     try:
-        communicate = edge_tts.Communicate(text_line, "hi-IN-MadhurNeural", rate="+10%")
-        await communicate.save(raw_mp3)
-        
+        # FIX 1: Auto-Retry for TTS to prevent "No audio received" errors
+        tts_success = False
+        for attempt in range(3):
+            try:
+                communicate = edge_tts.Communicate(text_line, "hi-IN-MadhurNeural", rate="+10%")
+                await communicate.save(raw_mp3)
+                tts_success = True
+                break
+            except Exception as e:
+                print(f"TTS Attempt {attempt+1} failed for scene {i}: {str(e)}")
+                await asyncio.sleep(2) # Wait 2 seconds before retrying
+                
+        if not tts_success:
+            print(f"Skipping scene {i} due to continuous TTS failure.")
+            return None
+            
         raw_dur = await get_audio_duration(raw_mp3)
         dur = max(1.0, raw_dur - 0.2) 
         fade_out = max(0, dur - 0.5)
@@ -74,7 +87,6 @@ async def process_scene(session, i, scene):
                     with open(vid_path, "wb") as f:
                         f.write(await resp.read())
                         
-            # FIX: Added -fflags +genpts to fix video freezing/black screens during loop
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-stream_loop', '-1', '-fflags', '+genpts', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3,
                 '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
@@ -84,7 +96,6 @@ async def process_scene(session, i, scene):
                 '-t', str(dur), scene_filename
             ]
         else:
-            # Fallback color changed slightly to indicate Pexels API failed
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#1a1a2e:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3,
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32',
@@ -105,7 +116,16 @@ async def process_scene(session, i, scene):
 
 async def main_pipeline():
     async with aiohttp.ClientSession() as session:
-        tasks = [process_scene(session, i, scene) for i, scene in enumerate(scenes_data)]
+        
+        # FIX 2: Added a Semaphore to limit concurrency to 4 simultaneous tasks
+        # This prevents spamming Microsoft/Pexels servers and getting blocked.
+        sem = asyncio.Semaphore(4)
+        
+        async def safe_process(session, i, scene):
+            async with sem:
+                return await process_scene(session, i, scene)
+
+        tasks = [safe_process(session, i, scene) for i, scene in enumerate(scenes_data)]
         results = await asyncio.gather(*tasks)
         
         results = sorted([r for r in results if r], key=lambda x: x['index'])
