@@ -80,14 +80,14 @@ async def process_scene(session, i, scene):
                 'ffmpeg', '-y', '-stream_loop', '-1', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3,
                 '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
                 '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', 
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32', 
                 '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
             ]
         else:
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#05050f:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3,
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32',
                 '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
             ]
@@ -136,7 +136,6 @@ async def main_pipeline():
             cmd += ['-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25,drawtext=text=\'Deep Space Hindi\':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]', '-map', '[vout]', '-map', '[aout]']
 
         # ULTRA COMPRESSION FIX TO BYPASS 100MB LIMIT AND n8n TIMEOUT
-        # Changed CRF to 32 and Audio Bitrate to 96k
         cmd += ['-c:v', 'libx264', '-crf', '32', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-shortest', final_video]
         subprocess.run(cmd, check=True)
 
@@ -145,32 +144,54 @@ async def main_pipeline():
             if os.path.exists(f): os.remove(f)
 
         # ==========================================
-        # PHASE 3: ASYNC MULTI-SERVER UPLOAD
+        # PHASE 3: HYPER-RESILIENT MULTI-SERVER UPLOAD
         # ==========================================
         video_link = None
-        for url in ["https://tmpfiles.org/api/v1/upload", "https://litterbox.catbox.moe/resources/internals/api.php"]:
+        
+        # 1. TRY TRANSFER.SH (Most reliable for GitHub Actions, gives direct MP4 link)
+        if not video_link:
+            try:
+                with open(final_video, 'rb') as f:
+                    async with session.put("https://transfer.sh/final_video.mp4", data=f, timeout=600) as resp:
+                        if resp.status == 200:
+                            text_resp = await resp.text()
+                            if text_resp.startswith("http"):
+                                video_link = text_resp.strip()
+            except Exception as e:
+                print(f"Transfer.sh upload failed: {str(e)}")
+
+        # 2. TRY TMPFILES.ORG (Fallback 1)
+        if not video_link:
             try:
                 with open(final_video, 'rb') as f:
                     data = aiohttp.FormData()
-                    if "litterbox" in url:
-                        data.add_field('reqtype', 'fileupload')
-                        data.add_field('time', '12h')
-                        data.add_field('fileToUpload', f, filename='final_video.mp4')
-                    else:
-                        data.add_field('file', f, filename='final_video.mp4')
-                    
-                    async with session.post(url, data=data, timeout=600) as resp:
-                        resp_text = await resp.text()
-                        if "litterbox" in url and resp.status == 200 and resp_text.startswith("http"):
-                            video_link = resp_text.strip()
-                        elif "tmpfiles" in url:
-                            js = json.loads(resp_text)
-                            if js.get('status') == 'success':
-                                video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
-                if video_link: break
+                    data.add_field('file', f, filename='final_video.mp4')
+                    async with session.post("https://tmpfiles.org/api/v1/upload", data=data, timeout=600) as resp:
+                        if resp.status == 200:
+                            try:
+                                js = await resp.json()
+                                if js.get('status') == 'success':
+                                    video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                            except Exception:
+                                print("Tmpfiles returned invalid JSON (Likely IP block).")
             except Exception as e:
-                print(f"Upload failed for {url}: {str(e)}")
-                continue
+                print(f"Tmpfiles upload failed: {str(e)}")
+
+        # 3. TRY CATBOX.MOE (Fallback 2)
+        if not video_link:
+            try:
+                with open(final_video, 'rb') as f:
+                    data = aiohttp.FormData()
+                    data.add_field('reqtype', 'fileupload')
+                    data.add_field('time', '12h')
+                    data.add_field('fileToUpload', f, filename='final_video.mp4')
+                    async with session.post("https://litterbox.catbox.moe/resources/internals/api.php", data=data, timeout=600) as resp:
+                        if resp.status == 200:
+                            text_resp = await resp.text()
+                            if text_resp.startswith("http"):
+                                video_link = text_resp.strip()
+            except Exception as e:
+                print(f"Catbox upload failed: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION (DEBUG FIX)
