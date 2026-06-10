@@ -97,10 +97,10 @@ cmd += ['-c:v', 'libx264', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '
 subprocess.run(cmd, check=True)
 
 # ==========================================
-# PHASE 3: MULTI-SERVER UPLOAD
+# PHASE 3: MULTI-SERVER UPLOAD (UPDATED)
 # ==========================================
 video_link = None
-for url in ["https://litterbox.catbox.moe/resources/internals/api.php", "https://tmpfiles.org/api/v1/upload"]:
+for url in ["https://tmpfiles.org/api/v1/upload", "https://litterbox.catbox.moe/resources/internals/api.php"]:
     try:
         files = {'fileToUpload' if "litterbox" in url else 'file': open("final_video.mp4", 'rb')}
         data = {'reqtype': 'fileupload', 'time': '12h'} if "litterbox" in url else None
