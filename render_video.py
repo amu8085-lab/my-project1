@@ -26,7 +26,6 @@ async def fetch_pexels_video(session, keyword):
             try:
                 await asyncio.sleep(random.uniform(0.1, 0.5))
                 random_page = random.randint(1, 5) 
-                # FIX 1: Changed size=medium to size=large for Full HD video quality
                 url = f"https://api.pexels.com/videos/search?query={query}&per_page=5&page={random_page}&orientation=landscape&size=large"
                 
                 async with session.get(url, headers={"Authorization": pexels_key}, timeout=10) as response:
@@ -93,35 +92,36 @@ async def process_scene(session, i, scene):
             except Exception as e:
                 print(f"Failed to download video for scene {i}: {str(e)}")
 
-        # FIX 2: Changed CRF from 32 to 25 for high visual quality, and audio bitrate to 128k
+        has_pop = os.path.exists("pop.mp3")
+
         if is_valid_video:
-            filter_str = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
-            ffmpeg_cmd = [
-                'ffmpeg', '-y', 
-                '-ignore_editlist', '1', 
-                '-stream_loop', '-1', 
-                '-fflags', '+genpts', 
-                '-i', vid_path, 
-                '-ss', '0.2', 
-                '-i', raw_mp3,
-                '-filter_complex', filter_str,
-                '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', 
-                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-                '-t', str(dur), scene_filename
-            ]
+            cmd = ['ffmpeg', '-y', '-ignore_editlist', '1', '-stream_loop', '-1', '-fflags', '+genpts', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3]
+            if has_pop: cmd += ['-i', 'pop.mp3']
+            # FIX: Added fps=30 for smoothness and unsharp filter for 4K-like crispness
+            v_filter = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30,unsharp=5:5:0.5:5:5:0.0,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
         else:
-            filter_str = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
-            ffmpeg_cmd = [
-                'ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3,
-                '-filter_complex', filter_str,
-                '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
-                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-                '-t', str(dur), scene_filename
-            ]
+            cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3]
+            if has_pop: cmd += ['-i', 'pop.mp3']
+            v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
+
+        if has_pop:
+            a_filter = "[1:a]volume=1.0[voice];[2:a]volume=0.8[pop];[voice][pop]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]"
+            filter_complex = f"{v_filter};{a_filter}"
+            a_map = '[aout]'
+        else:
+            filter_complex = v_filter
+            a_map = '1:a'
             
-        proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # FIX: Changed crf to 18 (visually lossless), preset to veryfast, and audio bitrate to 192k
+        cmd += [
+            '-filter_complex', filter_complex,
+            '-map', '[v]', '-map', a_map,
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+            '-c:a', 'aac', '-b:a', '192k', '-pix_fmt', 'yuv420p',
+            '-t', str(dur), scene_filename
+        ]
+            
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         await proc.communicate()
         
         return {"vid": scene_filename, "aud": raw_mp3, "index": i}
@@ -166,21 +166,20 @@ async def main_pipeline():
         # PHASE 2: "ZERO-RENDER" MUXING
         # ==========================================
         await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_video])
-        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '128k', raw_voice])
+        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '192k', raw_voice])
 
         bgm_path = os.path.abspath("bgm.mp3")
         if os.path.exists(bgm_path):
-            # FIX 3: Increased BGM Volume from 0.08 to 0.25 (25%) so it's clearly audible
             bgm_cmd = [
                 'ffmpeg', '-y', '-i', raw_voice, '-stream_loop', '-1', '-i', bgm_path,
-                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[1:a]volume=0.25[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
-                '-map', '[aout]', '-c:a', 'aac', '-b:a', '128k', final_audio
+                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[1:a]volume=0.6[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout_mix];[aout_mix]volume=2.0[aout]',
+                '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', final_audio
             ]
         else:
             bgm_cmd = [
                 'ffmpeg', '-y', '-i', raw_voice,
                 '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[aout]',
-                '-map', '[aout]', '-c:a', 'aac', '-b:a', '128k', final_audio
+                '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', final_audio
             ]
         await run_ffmpeg_async(bgm_cmd)
 
