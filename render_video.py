@@ -11,6 +11,9 @@ pexels_key = os.environ.get('PEXELS_API_KEY')
 chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
+# 👇 YAHAN APNA CHANNEL NAME LIKHEIN 👇
+channel_name = "Apna Channel Name" 
+
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
 # Universal fallbacks
@@ -91,7 +94,9 @@ async def process_scene(session, i, scene):
             except Exception as e:
                 print(f"Failed to download video for scene {i}: {str(e)}")
 
+        # FIX: Channel Name Watermark added back dynamically directly in Phase 1
         if is_valid_video:
+            filter_str = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
             ffmpeg_cmd = [
                 'ffmpeg', '-y', 
                 '-ignore_editlist', '1', 
@@ -100,15 +105,18 @@ async def process_scene(session, i, scene):
                 '-i', vid_path, 
                 '-ss', '0.2', 
                 '-i', raw_mp3,
-                '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,eq=contrast=1.1:saturation=1.25,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
+                '-filter_complex', filter_str,
                 '-map', '[v]', '-map', '1:a',
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32', 
                 '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
             ]
         else:
+            filter_str = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3,
+                '-filter_complex', filter_str,
+                '-map', '[v]', '-map', '1:a',
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32',
                 '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
                 '-t', str(dur), scene_filename
@@ -185,7 +193,6 @@ async def main_pipeline():
         # ==========================================
         video_link = None
         
-        # 1. TRY CATBOX.MOE (200MB Limit, Permanent, GH Actions Friendly)
         if not video_link:
             try:
                 print("Trying Catbox.moe...")
@@ -203,7 +210,6 @@ async def main_pipeline():
             except Exception as e:
                 print(f"Catbox error: {str(e)}")
 
-        # 2. TRY LITTERBOX (1GB Limit, 12 Hours, GH Actions Friendly)
         if not video_link:
             try:
                 print("Trying Litterbox...")
@@ -221,7 +227,6 @@ async def main_pipeline():
             except Exception as e:
                 print(f"Litterbox error: {str(e)}")
 
-        # 3. TRY TMPFILES.ORG (Fallback)
         if not video_link:
             try:
                 print("Trying tmpfiles.org...")
