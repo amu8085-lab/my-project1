@@ -1,6 +1,7 @@
 import os, sys, json, subprocess, time, random, asyncio, re
 import aiohttp
 import edge_tts
+import shutil
 
 # --- VARIABLES ---
 scenes_data = json.loads(os.environ.get('SCENES_DATA', '[]'))
@@ -11,6 +12,7 @@ pexels_key = os.environ.get('PEXELS_API_KEY')
 chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
+# 👇 Yahan apna channel name set karein 👇
 channel_name = "Deep Space" 
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
@@ -92,16 +94,16 @@ async def process_scene(session, i, scene):
             except Exception as e:
                 print(f"Failed to download video for scene {i}: {str(e)}")
 
-        has_pop = os.path.exists("pop.mp3")
+        pop_path = os.path.abspath("pop.mp3")
+        has_pop = os.path.exists(pop_path)
 
         if is_valid_video:
             cmd = ['ffmpeg', '-y', '-ignore_editlist', '1', '-stream_loop', '-1', '-fflags', '+genpts', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3]
-            if has_pop: cmd += ['-i', 'pop.mp3']
-            # FIX: Added fps=30 for smoothness and unsharp filter for 4K-like crispness
+            if has_pop: cmd += ['-i', pop_path]
             v_filter = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30,unsharp=5:5:0.5:5:5:0.0,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
         else:
             cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3]
-            if has_pop: cmd += ['-i', 'pop.mp3']
+            if has_pop: cmd += ['-i', pop_path]
             v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
 
         if has_pop:
@@ -112,7 +114,6 @@ async def process_scene(session, i, scene):
             filter_complex = v_filter
             a_map = '1:a'
             
-        # FIX: Changed crf to 18 (visually lossless), preset to veryfast, and audio bitrate to 192k
         cmd += [
             '-filter_complex', filter_complex,
             '-map', '[v]', '-map', a_map,
@@ -150,43 +151,39 @@ async def main_pipeline():
         results = sorted([r for r in results if r], key=lambda x: x['index'])
 
         vid_list_path = os.path.join(TEMP_DIR, "vid_list.txt")
-        aud_list_path = os.path.join(TEMP_DIR, "aud_list.txt")
         
         with open(vid_list_path, "w") as f:
             for r in results: f.write(f"file '{r['vid']}'\n")
-        with open(aud_list_path, "w") as f:
-            for r in results: f.write(f"file '{r['aud']}'\n")
 
         raw_video = os.path.join(TEMP_DIR, 'raw_video.mp4')
-        raw_voice = os.path.join(TEMP_DIR, 'raw_voice.aac')
-        final_audio = os.path.join(TEMP_DIR, 'final_audio.aac')
         final_video = 'final_video.mp4' 
         
         # ==========================================
-        # PHASE 2: "ZERO-RENDER" MUXING
+        # PHASE 2: FLAWLESS AUDIO MUXING
         # ==========================================
+        # 1. Join all scenes (Video + Voice + Pop) together seamlessly
         await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_video])
-        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '192k', raw_voice])
 
         bgm_path = os.path.abspath("bgm.mp3")
         if os.path.exists(bgm_path):
+            # 2. Add BGM over the completed video timeline. Explicit mapping guarantees no audio is dropped!
             bgm_cmd = [
-                'ffmpeg', '-y', '-i', raw_voice, '-stream_loop', '-1', '-i', bgm_path,
-                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[1:a]volume=0.6[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout_mix];[aout_mix]volume=2.0[aout]',
-                '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', final_audio
+                'ffmpeg', '-y', '-i', raw_video, '-stream_loop', '-1', '-i', bgm_path,
+                '-filter_complex', '[0:a]volume=1.0[voice];[1:a]volume=0.4[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]',
+                '-map', '0:v', '-map', '[aout]',
+                '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', final_video
             ]
+            await run_ffmpeg_async(bgm_cmd)
         else:
-            bgm_cmd = [
-                'ffmpeg', '-y', '-i', raw_voice,
-                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[aout]',
-                '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k', final_audio
-            ]
-        await run_ffmpeg_async(bgm_cmd)
+            # If no BGM exists, just save the raw_video as final
+            shutil.move(raw_video, final_video)
 
-        await run_ffmpeg_async(['ffmpeg', '-y', '-i', raw_video, '-i', final_audio, '-c:v', 'copy', '-c:a', 'copy', '-shortest', final_video])
-
-        for f in [vid_list_path, aud_list_path, raw_video, raw_voice, final_audio] + [r['vid'] for r in results] + [r['aud'] for r in results]:
-            if os.path.exists(f): os.remove(f)
+        # Cleanup
+        if os.path.exists(vid_list_path): os.remove(vid_list_path)
+        if os.path.exists(raw_video): os.remove(raw_video)
+        for r in results:
+            if os.path.exists(r['vid']): os.remove(r['vid'])
+            if os.path.exists(r['aud']): os.remove(r['aud'])
 
         # ==========================================
         # PHASE 3: THE "ANTI-BLOCK" cURL UPLOAD
