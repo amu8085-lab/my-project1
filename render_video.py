@@ -1,4 +1,4 @@
-import os, sys, json, subprocess, time, random, asyncio
+import os, sys, json, subprocess, time, random, asyncio, re
 import aiohttp
 import edge_tts
 
@@ -13,7 +13,8 @@ telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
-FALLBACK_KEYWORDS = ["abstract motion background", "nature landscape", "technology concept", "smooth gradient animation"]
+# Universal fallbacks (Optimized for broad topics including Android/Tech niches)
+FALLBACK_KEYWORDS = ["abstract motion background", "technology concept", "smartphone interface", "digital data animation", "smooth gradient"]
 
 # Use Linux RAM Disk if available for extreme speed, else use current dir
 TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
@@ -47,9 +48,6 @@ async def get_audio_duration(file_path):
     except:
         return 5.0 
 
-# ==========================================
-# PHASE 1: ASYNC SCENE GENERATION
-# ==========================================
 async def process_scene(session, i, scene):
     keyword = scene.get('keyword', 'abstract')
     text_line = scene.get('text', '').strip()
@@ -64,7 +62,6 @@ async def process_scene(session, i, scene):
         for attempt in range(3):
             try:
                 communicate = edge_tts.Communicate(text_line, "hi-IN-MadhurNeural", rate="+10%")
-                # FIX 1: Strict 15-second timeout to prevent infinite freezes
                 await asyncio.wait_for(communicate.save(raw_mp3), timeout=15.0)
                 tts_success = True
                 break
@@ -98,7 +95,6 @@ async def process_scene(session, i, scene):
                 print(f"Failed to download video for scene {i}: {str(e)}")
 
         if is_valid_video:
-            # FIX 2: Added setsar=1,format=yuv420p to prevent "odd pixel dimension" crashes
             ffmpeg_cmd = [
                 'ffmpeg', '-y', 
                 '-ignore_editlist', '1', 
@@ -107,7 +103,7 @@ async def process_scene(session, i, scene):
                 '-i', vid_path, 
                 '-ss', '0.2', 
                 '-i', raw_mp3,
-                '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
+                '-filter_complex', f'[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,eq=contrast=1.1:saturation=1.25,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]',
                 '-map', '[v]', '-map', '1:a',
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32', 
                 '-c:a', 'aac', '-b:a', '96k', '-pix_fmt', 'yuv420p',
@@ -132,7 +128,6 @@ async def process_scene(session, i, scene):
     finally:
         if os.path.exists(vid_path): os.remove(vid_path)
 
-# FIX 3: Utility function for 100% pure async FFmpeg execution
 async def run_ffmpeg_async(cmd):
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     await proc.communicate()
@@ -158,74 +153,99 @@ async def main_pipeline():
         with open(aud_list_path, "w") as f:
             for r in results: f.write(f"file '{r['aud']}'\n")
 
-        raw_merged = os.path.join(TEMP_DIR, 'raw_merged.mp4')
-        merged_audio = os.path.join(TEMP_DIR, 'merged_audio.aac')
+        raw_video = os.path.join(TEMP_DIR, 'raw_video.mp4')
+        raw_voice = os.path.join(TEMP_DIR, 'raw_voice.aac')
+        final_audio = os.path.join(TEMP_DIR, 'final_audio.aac')
         final_video = 'final_video.mp4' 
         
-        # Converted blockings calls to fully async
-        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_merged])
-        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '96k', merged_audio])
+        # ==========================================
+        # PHASE 2: "ZERO-RENDER" MUXING (SUPER FAST)
+        # ==========================================
+        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_video])
+        await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '96k', raw_voice])
 
-        cmd = ['ffmpeg', '-y', '-i', raw_merged, '-i', merged_audio]
-        
         if os.path.exists("bgm.mp3"):
-            cmd += ['-stream_loop', '-1', '-i', 'bgm.mp3', '-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[2:a]volume=0.08[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]', '-map', '[vout]', '-map', '[aout]']
+            bgm_cmd = [
+                'ffmpeg', '-y', '-i', raw_voice, '-stream_loop', '-1', '-i', 'bgm.mp3',
+                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[norm_voice];[1:a]volume=0.08[bgm];[norm_voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+                '-map', '[aout]', '-c:a', 'aac', '-b:a', '96k', final_audio
+            ]
         else:
-            cmd += ['-filter_complex', '[0:v]eq=contrast=1.1:saturation=1.25[vout];[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]', '-map', '[vout]', '-map', '[aout]']
+            bgm_cmd = [
+                'ffmpeg', '-y', '-i', raw_voice,
+                '-filter_complex', '[0:a]loudnorm=I=-14:TP=-2:LRA=11[aout]',
+                '-map', '[aout]', '-c:a', 'aac', '-b:a', '96k', final_audio
+            ]
+        await run_ffmpeg_async(bgm_cmd)
 
-        cmd += ['-c:v', 'libx264', '-crf', '32', '-preset', 'fast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-shortest', final_video]
-        
-        await run_ffmpeg_async(cmd)
+        await run_ffmpeg_async(['ffmpeg', '-y', '-i', raw_video, '-i', final_audio, '-c:v', 'copy', '-c:a', 'copy', '-shortest', final_video])
 
-        for f in [vid_list_path, aud_list_path, raw_merged, merged_audio] + [r['vid'] for r in results] + [r['aud'] for r in results]:
+        for f in [vid_list_path, aud_list_path, raw_video, raw_voice, final_audio] + [r['vid'] for r in results] + [r['aud'] for r in results]:
             if os.path.exists(f): os.remove(f)
 
         # ==========================================
-        # PHASE 3: HYPER-RESILIENT MULTI-SERVER UPLOAD
+        # PHASE 3: NATIVE cURL MULTI-SERVER UPLOAD
         # ==========================================
         video_link = None
         
+        # 1. TRY BASHUPLOAD 
         if not video_link:
             try:
-                with open(final_video, 'rb') as f:
-                    async with session.put("https://transfer.sh/final_video.mp4", data=f, timeout=600) as resp:
-                        if resp.status == 200:
-                            text_resp = await resp.text()
-                            if text_resp.startswith("http"):
-                                video_link = text_resp.strip()
+                print("Trying bashupload.com...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://bashupload.com', 
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                match = re.search(r'(https://bashupload\.com/[^\s]+)', out_text)
+                if match: 
+                    video_link = match.group(1)
+                else:
+                    print(f"Bashupload failed/rejected: {out_text}")
             except Exception as e:
-                print(f"Transfer.sh upload failed: {str(e)}")
+                print(f"Bashupload error: {str(e)}")
 
+        # 2. TRY TMPFILES.ORG via cURL
         if not video_link:
             try:
-                with open(final_video, 'rb') as f:
-                    data = aiohttp.FormData()
-                    data.add_field('file', f, filename='final_video.mp4')
-                    async with session.post("https://tmpfiles.org/api/v1/upload", data=data, timeout=600) as resp:
-                        if resp.status == 200:
-                            try:
-                                js = await resp.json()
-                                if js.get('status') == 'success':
-                                    video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
-                            except Exception:
-                                print("Tmpfiles returned invalid JSON.")
+                print("Trying tmpfiles.org...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://tmpfiles.org/api/v1/upload',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                try:
+                    js = json.loads(out_text)
+                    if js.get('status') == 'success':
+                        video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                    else:
+                        print(f"Tmpfiles API Error: {out_text}")
+                except Exception:
+                    print(f"Tmpfiles invalid response (Cloudflare block?): {out_text}")
             except Exception as e:
-                print(f"Tmpfiles upload failed: {str(e)}")
+                print(f"Tmpfiles error: {str(e)}")
 
+        # 3. TRY TRANSFER.SH via cURL 
         if not video_link:
             try:
-                with open(final_video, 'rb') as f:
-                    data = aiohttp.FormData()
-                    data.add_field('reqtype', 'fileupload')
-                    data.add_field('time', '12h')
-                    data.add_field('fileToUpload', f, filename='final_video.mp4')
-                    async with session.post("https://litterbox.catbox.moe/resources/internals/api.php", data=data, timeout=600) as resp:
-                        if resp.status == 200:
-                            text_resp = await resp.text()
-                            if text_resp.startswith("http"):
-                                video_link = text_resp.strip()
+                print("Trying transfer.sh...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '--upload-file', final_video, 'https://transfer.sh/final_video.mp4',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"Transfer.sh rejected: {out_text}")
             except Exception as e:
-                print(f"Catbox upload failed: {str(e)}")
+                print(f"Transfer.sh error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
