@@ -13,10 +13,9 @@ telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
-# Universal fallbacks (Optimized for broad topics including Android/Tech niches)
+# Universal fallbacks (Optimized for broad topics)
 FALLBACK_KEYWORDS = ["abstract motion background", "technology concept", "smartphone interface", "digital data animation", "smooth gradient"]
 
-# Use Linux RAM Disk if available for extreme speed, else use current dir
 TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
 
 async def fetch_pexels_video(session, keyword):
@@ -184,30 +183,55 @@ async def main_pipeline():
             if os.path.exists(f): os.remove(f)
 
         # ==========================================
-        # PHASE 3: NATIVE cURL MULTI-SERVER UPLOAD
+        # PHASE 3: LARGE-PAYLOAD MULTI-SERVER UPLOAD
         # ==========================================
         video_link = None
         
-        # 1. TRY BASHUPLOAD 
+        # 1. TRY PIXELDRAIN (Highly reliable for large video files, gives direct stream link)
         if not video_link:
             try:
-                print("Trying bashupload.com...")
+                print("Trying pixeldrain.com...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://bashupload.com', 
+                    'curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file/',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                match = re.search(r'(https://bashupload\.com/[^\s]+)', out_text)
-                if match: 
-                    video_link = match.group(1)
-                else:
-                    print(f"Bashupload failed/rejected: {out_text}")
+                try:
+                    js = json.loads(out_text)
+                    if js.get('success'):
+                        video_link = f"https://pixeldrain.com/api/file/{js['id']}"
+                    else:
+                        print(f"Pixeldrain API Error: {out_text}")
+                except Exception:
+                    print(f"Pixeldrain invalid response: {out_text}")
             except Exception as e:
-                print(f"Bashupload error: {str(e)}")
+                print(f"Pixeldrain error: {str(e)}")
 
-        # 2. TRY TMPFILES.ORG via cURL
+        # 2. TRY FILE.IO (Up to 100MB robust upload)
+        if not video_link:
+            try:
+                print("Trying file.io...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://file.io',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                try:
+                    js = json.loads(out_text)
+                    if js.get('success'):
+                        video_link = js.get('link')
+                    else:
+                        print(f"File.io API Error: {out_text}")
+                except Exception:
+                    print(f"File.io invalid response: {out_text}")
+            except Exception as e:
+                print(f"File.io error: {str(e)}")
+
+        # 3. TRY TMPFILES.ORG (Fallback for smaller payloads)
         if not video_link:
             try:
                 print("Trying tmpfiles.org...")
@@ -225,27 +249,9 @@ async def main_pipeline():
                     else:
                         print(f"Tmpfiles API Error: {out_text}")
                 except Exception:
-                    print(f"Tmpfiles invalid response (Cloudflare block?): {out_text}")
+                    print(f"Tmpfiles invalid response: {out_text}")
             except Exception as e:
                 print(f"Tmpfiles error: {str(e)}")
-
-        # 3. TRY TRANSFER.SH via cURL 
-        if not video_link:
-            try:
-                print("Trying transfer.sh...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '--upload-file', final_video, 'https://transfer.sh/final_video.mp4',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                if out_text.startswith("http"):
-                    video_link = out_text
-                else:
-                    print(f"Transfer.sh rejected: {out_text}")
-            except Exception as e:
-                print(f"Transfer.sh error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
@@ -254,7 +260,7 @@ async def main_pipeline():
             if video_link:
                 payload = {"chat_id": chat_id, "text": f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"}
             else:
-                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, GitHub Actions check karein."}
+                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, sabhi free servers ne limit cross hone par file reject kar di."}
             
             try:
                 async with session.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json=payload) as resp:
