@@ -13,7 +13,7 @@ telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
-# Universal fallbacks (Optimized for broad topics)
+# Universal fallbacks
 FALLBACK_KEYWORDS = ["abstract motion background", "technology concept", "smartphone interface", "digital data animation", "smooth gradient"]
 
 TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
@@ -32,8 +32,6 @@ async def fetch_pexels_video(session, keyword):
                         res = await response.json()
                         if res.get('videos') and len(res['videos']) > 0:
                             return random.choice(res['videos'])['video_files'][0]['link']
-                    elif response.status == 429:
-                        print("WARNING: Pexels API Rate Limit Hit (429)!")
             except Exception:
                 continue
     return None
@@ -158,7 +156,7 @@ async def main_pipeline():
         final_video = 'final_video.mp4' 
         
         # ==========================================
-        # PHASE 2: "ZERO-RENDER" MUXING (SUPER FAST)
+        # PHASE 2: "ZERO-RENDER" MUXING
         # ==========================================
         await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_video])
         await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', aud_list_path, '-c:a', 'aac', '-b:a', '96k', raw_voice])
@@ -183,55 +181,47 @@ async def main_pipeline():
             if os.path.exists(f): os.remove(f)
 
         # ==========================================
-        # PHASE 3: LARGE-PAYLOAD MULTI-SERVER UPLOAD
+        # PHASE 3: THE "ANTI-BLOCK" cURL UPLOAD
         # ==========================================
         video_link = None
         
-        # 1. TRY PIXELDRAIN (Highly reliable for large video files, gives direct stream link)
+        # 1. TRY CATBOX.MOE (200MB Limit, Permanent, GH Actions Friendly)
         if not video_link:
             try:
-                print("Trying pixeldrain.com...")
+                print("Trying Catbox.moe...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file/',
+                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', f'fileToUpload=@{final_video}', 'https://catbox.moe/user/api.php',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                try:
-                    js = json.loads(out_text)
-                    if js.get('success'):
-                        video_link = f"https://pixeldrain.com/api/file/{js['id']}"
-                    else:
-                        print(f"Pixeldrain API Error: {out_text}")
-                except Exception:
-                    print(f"Pixeldrain invalid response: {out_text}")
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"Catbox API Error/Rejected: {out_text}")
             except Exception as e:
-                print(f"Pixeldrain error: {str(e)}")
+                print(f"Catbox error: {str(e)}")
 
-        # 2. TRY FILE.IO (Up to 100MB robust upload)
+        # 2. TRY LITTERBOX (1GB Limit, 12 Hours, GH Actions Friendly)
         if not video_link:
             try:
-                print("Trying file.io...")
+                print("Trying Litterbox...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://file.io',
+                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', 'time=12h', '-F', f'fileToUpload=@{final_video}', 'https://litterbox.catbox.moe/resources/internals/api.php',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                try:
-                    js = json.loads(out_text)
-                    if js.get('success'):
-                        video_link = js.get('link')
-                    else:
-                        print(f"File.io API Error: {out_text}")
-                except Exception:
-                    print(f"File.io invalid response: {out_text}")
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"Litterbox API Error/Rejected: {out_text}")
             except Exception as e:
-                print(f"File.io error: {str(e)}")
+                print(f"Litterbox error: {str(e)}")
 
-        # 3. TRY TMPFILES.ORG (Fallback for smaller payloads)
+        # 3. TRY TMPFILES.ORG (Fallback)
         if not video_link:
             try:
                 print("Trying tmpfiles.org...")
@@ -249,7 +239,7 @@ async def main_pipeline():
                     else:
                         print(f"Tmpfiles API Error: {out_text}")
                 except Exception:
-                    print(f"Tmpfiles invalid response: {out_text}")
+                    print(f"Tmpfiles invalid response (Cloudflare block?): {out_text}")
             except Exception as e:
                 print(f"Tmpfiles error: {str(e)}")
 
@@ -260,7 +250,7 @@ async def main_pipeline():
             if video_link:
                 payload = {"chat_id": chat_id, "text": f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"}
             else:
-                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua, sabhi free servers ne limit cross hone par file reject kar di."}
+                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua. Sabhi file hosts ne IP block kar di hai."}
             
             try:
                 async with session.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json=payload) as resp:
