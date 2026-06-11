@@ -11,8 +11,8 @@ pexels_key = os.environ.get('PEXELS_API_KEY')
 chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
-# 👇 YAHAN APNA CHANNEL NAME LIKHEIN 👇
-channel_name = "Apna Channel Name" 
+# 👇 YAHAN CHANNEL NAME UPDATE KAR DIYA GAYA HAI 👇
+channel_name = "Deep Space" 
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
@@ -94,7 +94,6 @@ async def process_scene(session, i, scene):
             except Exception as e:
                 print(f"Failed to download video for scene {i}: {str(e)}")
 
-        # FIX: Channel Name Watermark added back dynamically directly in Phase 1
         if is_valid_video:
             filter_str = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=24,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
             ffmpeg_cmd = [
