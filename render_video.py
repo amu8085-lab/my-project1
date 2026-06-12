@@ -183,67 +183,51 @@ async def main_pipeline():
             if os.path.exists(r['aud']): os.remove(r['aud'])
 
         # ==========================================
-        # PHASE 3: THE "ANTI-BLOCK" LARGE FILE UPLOAD
+        # PHASE 3: THE "DIRECT-LINK" RAW MEDIA UPLOAD
         # ==========================================
         video_link = None
         
-        # Method 1: 0x0.st (Supports up to 512MB, direct link)
+        # Method 1: Pixeldrain (Best for n8n, API returns raw file stream)
         if not video_link:
             try:
-                print("Trying 0x0.st...")
+                print("Trying pixeldrain.com...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://0x0.st',
+                    'curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                if out_text.startswith("http"):
-                    video_link = out_text
-                else:
-                    print(f"0x0.st Error/Rejected: {out_text}")
+                try:
+                    js = json.loads(out_text)
+                    if js.get('success'):
+                        # ?download forces the raw file stream instead of HTML page
+                        video_link = f"https://pixeldrain.com/api/file/{js['id']}?download"
+                    else:
+                        print(f"Pixeldrain API Error: {out_text}")
+                except Exception:
+                    print(f"Pixeldrain invalid response: {out_text}")
             except Exception as e:
-                print(f"0x0.st error: {str(e)}")
+                print(f"Pixeldrain error: {str(e)}")
 
-        # Method 2: bashupload.com (Supports up to 50GB, direct link via extraction)
+        # Method 2: Oshi.at (Fallback, gives direct DL link)
         if not video_link:
             try:
-                print("Trying bashupload.com...")
+                print("Trying oshi.at...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-T', final_video, 'https://bashupload.com',
+                    'curl', '-s', '-T', final_video, 'https://oshi.at',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
                 for line in out_text.split('\n'):
-                    if "bashupload.com" in line and "http" in line:
-                        video_link = line.replace("wget ", "").strip()
+                    if line.startswith("DL:"):
+                        base_url = line.replace("DL:", "").strip()
+                        video_link = f"{base_url}/final_video.mp4"
                         break
-                        
-                if not video_link:
-                    print(f"bashupload API Error: {out_text}")
             except Exception as e:
-                print(f"bashupload error: {str(e)}")
-
-        # Method 3: filebin.net (Robust direct link API)
-        if not video_link:
-            try:
-                print("Trying filebin.net...")
-                bin_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
-                fb_url = f"https://filebin.net/{bin_id}/final_video.mp4"
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-X', 'POST', '--data-binary', f'@{final_video}', '-H', 'filename: final_video.mp4', fb_url,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                await proc.communicate()
-                
-                if proc.returncode == 0:
-                    video_link = fb_url
-                else:
-                    print("filebin API Error")
-            except Exception as e:
-                print(f"filebin error: {str(e)}")
+                print(f"Oshi.at error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
