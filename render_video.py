@@ -187,12 +187,30 @@ async def main_pipeline():
         # ==========================================
         video_link = None
         
-        # Method 1: Pixeldrain (Best for n8n, API returns raw file stream)
+        # Method 1: envs.sh (Direct raw link, 512MB limit, very reliable)
         if not video_link:
             try:
-                print("Trying pixeldrain.com...")
+                print("Trying envs.sh...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file',
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://envs.sh',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"envs.sh API Error: {out_text}")
+            except Exception as e:
+                print(f"envs.sh error: {str(e)}")
+
+        # Method 2: pomf.lain.la (Direct raw link, 512MB limit)
+        if not video_link:
+            try:
+                print("Trying pomf.lain.la...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-F', f'files[]=@{final_video}', 'https://pomf.lain.la/upload.php',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
@@ -201,33 +219,31 @@ async def main_pipeline():
                 try:
                     js = json.loads(out_text)
                     if js.get('success'):
-                        # ?download forces the raw file stream instead of HTML page
-                        video_link = f"https://pixeldrain.com/api/file/{js['id']}?download"
+                        video_link = js['files'][0]['url']
                     else:
-                        print(f"Pixeldrain API Error: {out_text}")
+                        print(f"pomf API Error: {out_text}")
                 except Exception:
-                    print(f"Pixeldrain invalid response: {out_text}")
+                    print(f"pomf invalid response: {out_text}")
             except Exception as e:
-                print(f"Pixeldrain error: {str(e)}")
+                print(f"pomf error: {str(e)}")
 
-        # Method 2: Oshi.at (Fallback, gives direct DL link)
+        # Method 3: litterbox.catbox.moe (Direct raw link, 1GB limit, 12h expiry)
         if not video_link:
             try:
-                print("Trying oshi.at...")
+                print("Trying litterbox.catbox.moe...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-T', final_video, 'https://oshi.at',
+                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', 'time=12h', '-F', f'fileToUpload=@{final_video}', 'https://litterbox.catbox.moe/resources/internals/api.php',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                for line in out_text.split('\n'):
-                    if line.startswith("DL:"):
-                        base_url = line.replace("DL:", "").strip()
-                        video_link = f"{base_url}/final_video.mp4"
-                        break
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"litterbox API Error: {out_text}")
             except Exception as e:
-                print(f"Oshi.at error: {str(e)}")
+                print(f"litterbox error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
