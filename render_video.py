@@ -192,43 +192,9 @@ async def main_pipeline():
         
         if not video_link:
             try:
-                print("Trying Catbox.moe...")
+                print("Trying file.io...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', f'fileToUpload=@{final_video}', 'https://catbox.moe/user/api.php',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                if out_text.startswith("http"):
-                    video_link = out_text
-                else:
-                    print(f"Catbox API Error/Rejected: {out_text}")
-            except Exception as e:
-                print(f"Catbox error: {str(e)}")
-
-        if not video_link:
-            try:
-                print("Trying Litterbox...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', 'time=12h', '-F', f'fileToUpload=@{final_video}', 'https://litterbox.catbox.moe/resources/internals/api.php',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                if out_text.startswith("http"):
-                    video_link = out_text
-                else:
-                    print(f"Litterbox API Error/Rejected: {out_text}")
-            except Exception as e:
-                print(f"Litterbox error: {str(e)}")
-
-        if not video_link:
-            try:
-                print("Trying tmpfiles.org...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://tmpfiles.org/api/v1/upload',
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://file.io',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
@@ -236,14 +202,52 @@ async def main_pipeline():
                 
                 try:
                     js = json.loads(out_text)
-                    if js.get('status') == 'success':
-                        video_link = js['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                    if js.get('success'):
+                        video_link = js.get('link')
                     else:
-                        print(f"Tmpfiles API Error: {out_text}")
+                        print(f"file.io API Error: {out_text}")
                 except Exception:
-                    print(f"Tmpfiles invalid response (Cloudflare block?): {out_text}")
+                    print(f"file.io invalid response: {out_text}")
             except Exception as e:
-                print(f"Tmpfiles error: {str(e)}")
+                print(f"file.io error: {str(e)}")
+
+        if not video_link:
+            try:
+                print("Trying uguu.se...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-F', f'files[]=@{final_video}', 'https://uguu.se/upload.php',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                try:
+                    js = json.loads(out_text)
+                    if js.get('success'):
+                        video_link = js['files'][0]['url']
+                    else:
+                        print(f"uguu.se API Error: {out_text}")
+                except Exception:
+                    print(f"uguu.se invalid response: {out_text}")
+            except Exception as e:
+                print(f"uguu.se error: {str(e)}")
+
+        if not video_link:
+            try:
+                print("Trying transfer.sh...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '--upload-file', final_video, 'https://transfer.sh/final_video.mp4',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                if out_text.startswith("http"):
+                    video_link = out_text
+                else:
+                    print(f"transfer.sh API Error/Rejected: {out_text}")
+            except Exception as e:
+                print(f"transfer.sh error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
