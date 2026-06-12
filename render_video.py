@@ -1,4 +1,4 @@
-import os, sys, json, subprocess, time, random, asyncio, re
+import os, sys, json, subprocess, time, random, asyncio, re, string
 import aiohttp
 import edge_tts
 import shutil
@@ -161,12 +161,10 @@ async def main_pipeline():
         # ==========================================
         # PHASE 2: FLAWLESS AUDIO MUXING
         # ==========================================
-        # 1. Join all scenes (Video + Voice + Pop) together seamlessly
         await run_ffmpeg_async(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', vid_list_path, '-c', 'copy', raw_video])
 
         bgm_path = os.path.abspath("bgm.mp3")
         if os.path.exists(bgm_path):
-            # 2. Add BGM over the completed video timeline. Explicit mapping guarantees no audio is dropped!
             bgm_cmd = [
                 'ffmpeg', '-y', '-i', raw_video, '-stream_loop', '-1', '-i', bgm_path,
                 '-filter_complex', '[0:a]volume=1.0[voice];[1:a]volume=0.4[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]',
@@ -175,7 +173,6 @@ async def main_pipeline():
             ]
             await run_ffmpeg_async(bgm_cmd)
         else:
-            # If no BGM exists, just save the raw_video as final
             shutil.move(raw_video, final_video)
 
         # Cleanup
@@ -186,57 +183,16 @@ async def main_pipeline():
             if os.path.exists(r['aud']): os.remove(r['aud'])
 
         # ==========================================
-        # PHASE 3: THE "ANTI-BLOCK" cURL UPLOAD
+        # PHASE 3: THE "ANTI-BLOCK" LARGE FILE UPLOAD
         # ==========================================
         video_link = None
         
+        # Method 1: 0x0.st (Supports up to 512MB, direct link)
         if not video_link:
             try:
-                print("Trying file.io...")
+                print("Trying 0x0.st...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://file.io',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                try:
-                    js = json.loads(out_text)
-                    if js.get('success'):
-                        video_link = js.get('link')
-                    else:
-                        print(f"file.io API Error: {out_text}")
-                except Exception:
-                    print(f"file.io invalid response: {out_text}")
-            except Exception as e:
-                print(f"file.io error: {str(e)}")
-
-        if not video_link:
-            try:
-                print("Trying uguu.se...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'files[]=@{final_video}', 'https://uguu.se/upload.php',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                try:
-                    js = json.loads(out_text)
-                    if js.get('success'):
-                        video_link = js['files'][0]['url']
-                    else:
-                        print(f"uguu.se API Error: {out_text}")
-                except Exception:
-                    print(f"uguu.se invalid response: {out_text}")
-            except Exception as e:
-                print(f"uguu.se error: {str(e)}")
-
-        if not video_link:
-            try:
-                print("Trying transfer.sh...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '--upload-file', final_video, 'https://transfer.sh/final_video.mp4',
+                    'curl', '-s', '-F', f'file=@{final_video}', 'https://0x0.st',
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
@@ -245,9 +201,49 @@ async def main_pipeline():
                 if out_text.startswith("http"):
                     video_link = out_text
                 else:
-                    print(f"transfer.sh API Error/Rejected: {out_text}")
+                    print(f"0x0.st Error/Rejected: {out_text}")
             except Exception as e:
-                print(f"transfer.sh error: {str(e)}")
+                print(f"0x0.st error: {str(e)}")
+
+        # Method 2: bashupload.com (Supports up to 50GB, direct link via extraction)
+        if not video_link:
+            try:
+                print("Trying bashupload.com...")
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-T', final_video, 'https://bashupload.com',
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out_text = stdout.decode().strip()
+                
+                for line in out_text.split('\n'):
+                    if "bashupload.com" in line and "http" in line:
+                        video_link = line.replace("wget ", "").strip()
+                        break
+                        
+                if not video_link:
+                    print(f"bashupload API Error: {out_text}")
+            except Exception as e:
+                print(f"bashupload error: {str(e)}")
+
+        # Method 3: filebin.net (Robust direct link API)
+        if not video_link:
+            try:
+                print("Trying filebin.net...")
+                bin_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
+                fb_url = f"https://filebin.net/{bin_id}/final_video.mp4"
+                proc = await asyncio.create_subprocess_exec(
+                    'curl', '-s', '-X', 'POST', '--data-binary', f'@{final_video}', '-H', 'filename: final_video.mp4', fb_url,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                await proc.communicate()
+                
+                if proc.returncode == 0:
+                    video_link = fb_url
+                else:
+                    print("filebin API Error")
+            except Exception as e:
+                print(f"filebin error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
