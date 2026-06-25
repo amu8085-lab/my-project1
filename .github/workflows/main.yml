@@ -5,6 +5,10 @@ on:
     types: [render_and_upload]
   workflow_dispatch:
 
+# 👇 YEH BLOCK ADD KIYA GAYA HAI (Releases create karne ki permission) 👇
+permissions:
+  contents: write
+
 jobs:
   build_video:
     runs-on: ubuntu-latest
@@ -33,6 +37,9 @@ jobs:
       - name: Run Video Rendering Script
         env:
           PYTHONUNBUFFERED: "1"
+          
+          # 👇 YEH LINE ADD KI GAYI HAI 👇
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
           # Payload Data from n8n Webhook
           SCENES_DATA: ${{ github.event.client_payload.scenes_data }}
