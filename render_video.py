@@ -188,35 +188,30 @@ async def main_pipeline():
         video_link = None
         
         upload_methods = [
+            # Option 1: Pixeldrain (Best Direct Link)
             {
                 "name": "Pixeldrain",
                 "cmd": ['curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file'],
                 "parse": lambda out: f"https://pixeldrain.com/api/file/{json.loads(out)['id']}" if 'json' in str(type(out)) or (out.startswith('{') and json.loads(out).get('success')) else None
             },
+            # Option 2: Bashupload (Gives direct download link)
+            {
+                "name": "Bashupload",
+                "cmd": ['curl', '-s', '-T', final_video, 'https://bashupload.com/'],
+                # Extracts the direct download URL by appending '?download=1'
+                "parse": lambda out: re.search(r'(https://bashupload\.com/[^\s]+)', out).group(1) + "?download=1" if re.search(r'(https://bashupload\.com/[^\s]+)', out) else None
+            },
+            # Option 3: File.io (Forces JSON response for correct parsing)
+            {
+                "name": "File.io",
+                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://file.io/?expires=1w'],
+                "parse": lambda out: json.loads(out)['link'] if out.startswith('{') and json.loads(out).get('success') else None
+            },
+            # Option 4: Transfer.sh (Direct raw link)
             {
                 "name": "Transfer.sh",
                 "cmd": ['curl', '-s', '--upload-file', final_video, f'https://transfer.sh/{os.path.basename(final_video)}'],
                 "parse": lambda out: out.strip() if out.strip().startswith("http") else None
-            },
-            {
-                "name": "File.io",
-                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://file.io'],
-                "parse": lambda out: json.loads(out)['link'] if out.startswith('{') and json.loads(out).get('success') else None
-            },
-            {
-                "name": "Oshi.at",
-                "cmd": ['curl', '-s', '-T', final_video, 'https://oshi.at'],
-                "parse": lambda out: re.search(r'DL: (https://oshi\.at/\S+)', out).group(1) if re.search(r'DL: (https://oshi\.at/\S+)', out) else None
-            },
-            {
-                "name": "0x0.st",
-                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://0x0.st'],
-                "parse": lambda out: out.strip() if out.strip().startswith("http") else None
-            },
-            {
-                "name": "Bashupload",
-                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://bashupload.com/'],
-                "parse": lambda out: re.search(r'(https://bashupload\.com/\S+)', out).group(1) if re.search(r'(https://bashupload\.com/\S+)', out) else None
             }
         ]
 
@@ -236,7 +231,8 @@ async def main_pipeline():
                 
                 parsed_link = method["parse"](out_text)
                 
-                if parsed_link and parsed_link.startswith("http"):
+                # Verify it's a valid direct link and not an HTML page
+                if parsed_link and parsed_link.startswith("http") and not 'gofile.io/d/' in parsed_link:
                     video_link = parsed_link
                     print(f"✅ Success with {method['name']}! Link: {video_link}")
                     break
@@ -244,29 +240,6 @@ async def main_pipeline():
                     print(f"❌ {method['name']} failed. Output: {out_text[:100]}...")
             except Exception as e:
                 print(f"⚠️ {method['name']} execution error: {str(e)}")
-
-        if not video_link:
-            try:
-                print("🔄 Trying Gofile.io API as final fallback...")
-                async with session.get("https://api.gofile.io/servers") as resp:
-                    if resp.status == 200:
-                        server_data = await resp.json()
-                        server = server_data["data"]["servers"][0]["name"]
-                        upload_url = f"https://{server}.gofile.io/contents/uploadfile"
-                        
-                        proc = await asyncio.create_subprocess_exec(
-                            'curl', '-s', '-F', f'file=@{final_video}', upload_url,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                        )
-                        stdout, stderr = await proc.communicate()
-                        out_text = stdout.decode().strip()
-                        
-                        js = json.loads(out_text)
-                        if js.get("status") == "ok":
-                            video_link = js["data"]["downloadPage"]
-                            print(f"✅ Success with Gofile! Link: {video_link}")
-            except Exception as e:
-                print(f"⚠️ Gofile error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
