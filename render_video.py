@@ -183,67 +183,90 @@ async def main_pipeline():
             if os.path.exists(r['aud']): os.remove(r['aud'])
 
         # ==========================================
-        # PHASE 3: THE "DIRECT-LINK" RAW MEDIA UPLOAD
+        # PHASE 3: ROBUST MULTI-HOST UPLOAD LOOP
         # ==========================================
         video_link = None
         
-        # Method 1: envs.sh (Direct raw link, 512MB limit, very reliable)
-        if not video_link:
-            try:
-                print("Trying envs.sh...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'file=@{final_video}', 'https://envs.sh',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                if out_text.startswith("http"):
-                    video_link = out_text
-                else:
-                    print(f"envs.sh API Error: {out_text}")
-            except Exception as e:
-                print(f"envs.sh error: {str(e)}")
+        upload_methods = [
+            {
+                "name": "Pixeldrain",
+                "cmd": ['curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file'],
+                "parse": lambda out: f"https://pixeldrain.com/api/file/{json.loads(out)['id']}" if 'json' in str(type(out)) or (out.startswith('{') and json.loads(out).get('success')) else None
+            },
+            {
+                "name": "Transfer.sh",
+                "cmd": ['curl', '-s', '--upload-file', final_video, f'https://transfer.sh/{os.path.basename(final_video)}'],
+                "parse": lambda out: out.strip() if out.strip().startswith("http") else None
+            },
+            {
+                "name": "File.io",
+                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://file.io'],
+                "parse": lambda out: json.loads(out)['link'] if out.startswith('{') and json.loads(out).get('success') else None
+            },
+            {
+                "name": "Oshi.at",
+                "cmd": ['curl', '-s', '-T', final_video, 'https://oshi.at'],
+                "parse": lambda out: re.search(r'DL: (https://oshi\.at/\S+)', out).group(1) if re.search(r'DL: (https://oshi\.at/\S+)', out) else None
+            },
+            {
+                "name": "0x0.st",
+                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://0x0.st'],
+                "parse": lambda out: out.strip() if out.strip().startswith("http") else None
+            },
+            {
+                "name": "Bashupload",
+                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://bashupload.com/'],
+                "parse": lambda out: re.search(r'(https://bashupload\.com/\S+)', out).group(1) if re.search(r'(https://bashupload\.com/\S+)', out) else None
+            }
+        ]
 
-        # Method 2: pomf.lain.la (Direct raw link, 512MB limit)
-        if not video_link:
+        print("\n🚀 Starting File Upload Sequence...")
+        
+        for method in upload_methods:
+            if video_link: 
+                break
             try:
-                print("Trying pomf.lain.la...")
+                print(f"🔄 Trying {method['name']}...")
                 proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', f'files[]=@{final_video}', 'https://pomf.lain.la/upload.php',
+                    *method["cmd"],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
                 out_text = stdout.decode().strip()
                 
-                try:
-                    js = json.loads(out_text)
-                    if js.get('success'):
-                        video_link = js['files'][0]['url']
-                    else:
-                        print(f"pomf API Error: {out_text}")
-                except Exception:
-                    print(f"pomf invalid response: {out_text}")
-            except Exception as e:
-                print(f"pomf error: {str(e)}")
-
-        # Method 3: litterbox.catbox.moe (Direct raw link, 1GB limit, 12h expiry)
-        if not video_link:
-            try:
-                print("Trying litterbox.catbox.moe...")
-                proc = await asyncio.create_subprocess_exec(
-                    'curl', '-s', '-F', 'reqtype=fileupload', '-F', 'time=12h', '-F', f'fileToUpload=@{final_video}', 'https://litterbox.catbox.moe/resources/internals/api.php',
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
+                parsed_link = method["parse"](out_text)
                 
-                if out_text.startswith("http"):
-                    video_link = out_text
+                if parsed_link and parsed_link.startswith("http"):
+                    video_link = parsed_link
+                    print(f"✅ Success with {method['name']}! Link: {video_link}")
+                    break
                 else:
-                    print(f"litterbox API Error: {out_text}")
+                    print(f"❌ {method['name']} failed. Output: {out_text[:100]}...")
             except Exception as e:
-                print(f"litterbox error: {str(e)}")
+                print(f"⚠️ {method['name']} execution error: {str(e)}")
+
+        if not video_link:
+            try:
+                print("🔄 Trying Gofile.io API as final fallback...")
+                async with session.get("https://api.gofile.io/servers") as resp:
+                    if resp.status == 200:
+                        server_data = await resp.json()
+                        server = server_data["data"]["servers"][0]["name"]
+                        upload_url = f"https://{server}.gofile.io/contents/uploadfile"
+                        
+                        proc = await asyncio.create_subprocess_exec(
+                            'curl', '-s', '-F', f'file=@{final_video}', upload_url,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                        )
+                        stdout, stderr = await proc.communicate()
+                        out_text = stdout.decode().strip()
+                        
+                        js = json.loads(out_text)
+                        if js.get("status") == "ok":
+                            video_link = js["data"]["downloadPage"]
+                            print(f"✅ Success with Gofile! Link: {video_link}")
+            except Exception as e:
+                print(f"⚠️ Gofile error: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
