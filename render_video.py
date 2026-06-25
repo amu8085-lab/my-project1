@@ -183,63 +183,32 @@ async def main_pipeline():
             if os.path.exists(r['aud']): os.remove(r['aud'])
 
         # ==========================================
-        # PHASE 3: ROBUST MULTI-HOST UPLOAD LOOP
+        # PHASE 3: GITHUB RELEASES (THE ULTIMATE FIX)
         # ==========================================
         video_link = None
+        print("\n🚀 Uploading Video directly to GitHub Releases...")
         
-        upload_methods = [
-            # Option 1: Pixeldrain (Best Direct Link)
-            {
-                "name": "Pixeldrain",
-                "cmd": ['curl', '-s', '-T', final_video, 'https://pixeldrain.com/api/file'],
-                "parse": lambda out: f"https://pixeldrain.com/api/file/{json.loads(out)['id']}" if 'json' in str(type(out)) or (out.startswith('{') and json.loads(out).get('success')) else None
-            },
-            # Option 2: Bashupload (Gives direct download link)
-            {
-                "name": "Bashupload",
-                "cmd": ['curl', '-s', '-T', final_video, 'https://bashupload.com/'],
-                # Extracts the direct download URL by appending '?download=1'
-                "parse": lambda out: re.search(r'(https://bashupload\.com/[^\s]+)', out).group(1) + "?download=1" if re.search(r'(https://bashupload\.com/[^\s]+)', out) else None
-            },
-            # Option 3: File.io (Forces JSON response for correct parsing)
-            {
-                "name": "File.io",
-                "cmd": ['curl', '-s', '-F', f'file=@{final_video}', 'https://file.io/?expires=1w'],
-                "parse": lambda out: json.loads(out)['link'] if out.startswith('{') and json.loads(out).get('success') else None
-            },
-            # Option 4: Transfer.sh (Direct raw link)
-            {
-                "name": "Transfer.sh",
-                "cmd": ['curl', '-s', '--upload-file', final_video, f'https://transfer.sh/{os.path.basename(final_video)}'],
-                "parse": lambda out: out.strip() if out.strip().startswith("http") else None
-            }
-        ]
-
-        print("\n🚀 Starting File Upload Sequence...")
+        run_id = os.environ.get('GITHUB_RUN_ID', str(int(time.time())))
+        tag_name = f"vid-{run_id}"
+        repo_name = "amu8085-lab/my-project1" 
         
-        for method in upload_methods:
-            if video_link: 
-                break
-            try:
-                print(f"🔄 Trying {method['name']}...")
-                proc = await asyncio.create_subprocess_exec(
-                    *method["cmd"],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out_text = stdout.decode().strip()
-                
-                parsed_link = method["parse"](out_text)
-                
-                # Verify it's a valid direct link and not an HTML page
-                if parsed_link and parsed_link.startswith("http") and not 'gofile.io/d/' in parsed_link:
-                    video_link = parsed_link
-                    print(f"✅ Success with {method['name']}! Link: {video_link}")
-                    break
-                else:
-                    print(f"❌ {method['name']} failed. Output: {out_text[:100]}...")
-            except Exception as e:
-                print(f"⚠️ {method['name']} execution error: {str(e)}")
+        try:
+            cmd = ['gh', 'release', 'create', tag_name, final_video, '--repo', repo_name, '--notes', 'Automated Video Render']
+            
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode == 0:
+                video_link = f"https://github.com/{repo_name}/releases/download/{tag_name}/final_video.mp4"
+                print(f"✅ Success! Video uploaded to GitHub: {video_link}")
+            else:
+                err_msg = stderr.decode().strip()
+                print(f"❌ GitHub Release failed. Error: {err_msg}")
+        except Exception as e:
+            print(f"⚠️ Exception during GitHub upload: {str(e)}")
 
         # ==========================================
         # PHASE 4: TELEGRAM NOTIFICATION
@@ -248,7 +217,7 @@ async def main_pipeline():
             if video_link:
                 payload = {"chat_id": chat_id, "text": f"READY_TO_UPLOAD|{video_link}|{title.replace('|', '')}|{thumbnail_prompt.replace('|', '')}|{description.replace('|', '')}"}
             else:
-                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua. Sabhi file hosts ne IP block kar di hai."}
+                payload = {"chat_id": chat_id, "text": f"⚠️ ERROR: Upload fail hua. GitHub release banne mein problem aayi."}
             
             try:
                 async with session.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", json=payload) as resp:
