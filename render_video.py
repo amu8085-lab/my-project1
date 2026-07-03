@@ -17,7 +17,8 @@ channel_name = "Deep Space"
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
-FALLBACK_KEYWORDS = ["abstract motion background", "technology concept", "smartphone interface", "digital data animation", "smooth gradient"]
+# Space-specific aur zyada reliable fallbacks taaki hamesha video mile
+FALLBACK_KEYWORDS = ["galaxy", "universe", "space", "nebula", "stars", "abstract motion background"]
 
 TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
 
@@ -27,14 +28,26 @@ async def fetch_pexels_video(session, keyword):
         for attempt in range(2):
             try:
                 await asyncio.sleep(random.uniform(0.1, 0.5))
-                random_page = random.randint(1, 5) 
-                url = f"https://api.pexels.com/videos/search?query={query}&per_page=5&page={random_page}&orientation=landscape&size=large"
+                # Jab attempts badhein toh safe page=1 rakho taaki khali result na aaye
+                random_page = random.randint(1, 2) if attempt == 0 else 1 
+                url = f"https://api.pexels.com/videos/search?query={query}&per_page=15&page={random_page}&orientation=landscape&size=large"
                 
                 async with session.get(url, headers={"Authorization": pexels_key}, timeout=10) as response:
+                    # [IMPROVED]: Added Rate Limit (429) Handling
+                    if response.status == 429:
+                        await asyncio.sleep(2)
+                        continue
+                        
                     if response.status == 200:
                         res = await response.json()
                         if res.get('videos') and len(res['videos']) > 0:
-                            return random.choice(res['videos'])['video_files'][0]['link']
+                            # Try to find a good quality link from a random video
+                            random_vid = random.choice(res['videos'])
+                            if random_vid.get('video_files'):
+                                # [IMPROVED]: Force HD/UHD quality preference over SD
+                                hd_files = [f for f in random_vid['video_files'] if f['quality'] in ['hd', 'uhd']]
+                                best_file = hd_files[0] if hd_files else random_vid['video_files'][0]
+                                return best_file['link']
             except Exception:
                 continue
     return None
@@ -79,20 +92,32 @@ async def process_scene(session, i, scene):
         dur = max(1.0, raw_dur - 0.2) 
         fade_out = max(0, dur - 0.5)
         
-        vid_url = await fetch_pexels_video(session, keyword)
+        # VIDEO FETCH & DOWNLOAD RETRY LOGIC (To Fix Black Screen)
         is_valid_video = False
+        vid_url = await fetch_pexels_video(session, keyword)
         
-        if vid_url:
-            try:
-                async with session.get(vid_url, timeout=15) as resp:
-                    if resp.status == 200:
-                        vid_bytes = await resp.read()
-                        if len(vid_bytes) > 50000: 
-                            with open(vid_path, "wb") as f:
-                                f.write(vid_bytes)
-                            is_valid_video = True
-            except Exception as e:
-                print(f"Failed to download video for scene {i}: {str(e)}")
+        for download_attempt in range(3):  # Download fail ho toh 3 baar retry karega
+            if not vid_url:
+                # [IMPROVED]: Dynamic fallback word use kiya hai instead of hardcoded 'galaxy'
+                vid_url = await fetch_pexels_video(session, random.choice(FALLBACK_KEYWORDS))
+                
+            if vid_url:
+                try:
+                    async with session.get(vid_url, timeout=15) as resp:
+                        if resp.status == 200:
+                            vid_bytes = await resp.read()
+                            # [IMPROVED]: Increased size threshold to 200KB to strictly avoid corrupt/small files
+                            if len(vid_bytes) > 200000: 
+                                with open(vid_path, "wb") as f:
+                                    f.write(vid_bytes)
+                                is_valid_video = True
+                                break # Download successful, break out of retry loop
+                            else:
+                                print(f"Video file too small ({len(vid_bytes)} bytes) on attempt {download_attempt+1}, discarding.")
+                except Exception as e:
+                    print(f"Failed to download video for scene {i} on attempt {download_attempt+1}: {str(e)}")
+            
+            vid_url = None # Reset kardo taaki next loop mein naya video fetch ho sake
 
         pop_path = os.path.abspath("pop.mp3")
         has_pop = os.path.exists(pop_path)
@@ -102,6 +127,7 @@ async def process_scene(session, i, scene):
             if has_pop: cmd += ['-i', pop_path]
             v_filter = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30,unsharp=5:5:0.5:5:5:0.0,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
         else:
+            # Agar 3 baar retry ke baad bhi video fail ho gaya, tabhi color generate hoga (almost impossible now)
             cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3]
             if has_pop: cmd += ['-i', pop_path]
             v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
