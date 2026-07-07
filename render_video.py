@@ -132,13 +132,15 @@ async def process_scene(session, i, scene):
             if has_pop: cmd += ['-i', pop_path]
             v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
 
+        # YAHAN FIX KIYA GAYA HAI: apad lagaya gaya hai audio stream end mein
         if has_pop:
-            a_filter = "[1:a]volume=1.0[voice];[2:a]volume=0.8[pop];[voice][pop]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]"
+            a_filter = "[1:a]volume=1.0,apad[voice];[2:a]volume=0.8[pop];[voice][pop]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]"
             filter_complex = f"{v_filter};{a_filter}"
             a_map = '[aout]'
         else:
-            filter_complex = v_filter
-            a_map = '1:a'
+            a_filter = "[1:a]apad[aout]"
+            filter_complex = f"{v_filter};{a_filter}"
+            a_map = '[aout]'
             
         cmd += [
             '-filter_complex', filter_complex,
@@ -193,7 +195,8 @@ async def main_pipeline():
         if os.path.exists(bgm_path):
             bgm_cmd = [
                 'ffmpeg', '-y', '-i', raw_video, '-stream_loop', '-1', '-i', bgm_path,
-                '-filter_complex', '[0:a]volume=1.0[voice];[1:a]volume=0.4[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]',
+                # 👇 YAHAN BGM VOLUME 0.38 KI GAYI HAI 👇
+                '-filter_complex', '[0:a]volume=1.0[voice];[1:a]volume=0.38[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout_mix];[aout_mix]volume=2.0[aout]',
                 '-map', '0:v', '-map', '[aout]',
                 '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', final_video
             ]
