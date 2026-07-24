@@ -13,7 +13,7 @@ chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 # 👇 Yahan apna channel name set karein 👇
-channel_name = "Deep Space" 
+channel_name = "Deep Space®" 
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
