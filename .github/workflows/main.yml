@@ -48,6 +48,9 @@ jobs:
           THUMBNAIL_PROMPT: ${{ github.event.client_payload.thumbnail_prompt }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           
+          # 👇 YAHAN SMART FALLBACK KEYWORDS ADD KIYA GAYA HAI 👇
+          FALLBACK_KEYWORDS: ${{ github.event.client_payload.fallback_keywords }}
+          
           # Repository Secrets
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }} # IMPORTANT: Ensure this is set in GitHub Secrets!
