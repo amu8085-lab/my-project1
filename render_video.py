@@ -17,8 +17,10 @@ channel_name = "Deep Space®"
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
-# Space-specific aur zyada reliable fallbacks taaki hamesha video mile
-FALLBACK_KEYWORDS = ["galaxy", "universe", "space", "nebula", "stars", "abstract motion background"]
+# --- SMART DYNAMIC FALLBACK KEYWORDS ---
+# GitHub Actions (via n8n) se jo bhi fallback theme aayegi, yeh usey list mein badal dega.
+fallback_env = os.environ.get('FALLBACK_KEYWORDS', 'galaxy, universe, space, nebula, stars, abstract motion background')
+FALLBACK_KEYWORDS = [kw.strip() for kw in fallback_env.split(',')]
 
 TEMP_DIR = "/dev/shm" if os.path.exists("/dev/shm") else os.getcwd()
 
