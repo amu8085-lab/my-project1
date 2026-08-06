@@ -12,8 +12,8 @@ pexels_key = os.environ.get('PEXELS_API_KEY')
 chat_id = os.environ.get('CHAT_ID')
 telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 
-# 👇 Yahan apna channel name set karein 👇
-channel_name = "Deep Space®" 
+# 👇 Yahan apna channel name set karein (Updated to Short Form for Safety) 👇
+channel_name = "DSH®" 
 
 print(f"DEBUG: Processing {len(scenes_data)} scenes async...")
 
@@ -124,15 +124,16 @@ async def process_scene(session, i, scene):
         pop_path = os.path.abspath("pop.mp3")
         has_pop = os.path.exists(pop_path)
 
+        # 👇 Watermark Fixed: 20% opacity (white@0.2), Top-Right (x=w-tw-40:y=40), Smaller Size (36) 👇
         if is_valid_video:
             cmd = ['ffmpeg', '-y', '-ignore_editlist', '1', '-stream_loop', '-1', '-fflags', '+genpts', '-i', vid_path, '-ss', '0.2', '-i', raw_mp3]
             if has_pop: cmd += ['-i', pop_path]
-            v_filter = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30,unsharp=5:5:0.5:5:5:0.0,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
+            v_filter = f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30,unsharp=5:5:0.5:5:5:0.0,eq=contrast=1.1:saturation=1.25,drawtext=text='{channel_name}':fontcolor=white@0.2:fontsize=36:x=w-tw-40:y=40,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
         else:
             # Agar 3 baar retry ke baad bhi video fail ho gaya, tabhi color generate hoga (almost impossible now)
             cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c=#151525:s=1920x1080:d={dur}', '-ss', '0.2', '-i', raw_mp3]
             if has_pop: cmd += ['-i', pop_path]
-            v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.5:fontsize=48:x=w-tw-50:y=h-th-50,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
+            v_filter = f"[0:v]drawtext=text='{channel_name}':fontcolor=white@0.2:fontsize=36:x=w-tw-40:y=40,fade=t=in:st=0:d=0.5,fade=t=out:st={fade_out}:d=0.5[v]"
 
         # YAHAN FIX KIYA GAYA HAI: apad lagaya gaya hai audio stream end mein
         if has_pop:
